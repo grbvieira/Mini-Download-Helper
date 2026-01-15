@@ -1,245 +1,213 @@
-// content.js - DETECÇÃO + PLACEHOLDER DE QUALIDADES
+// content.js - VERSÃO: ESPIÃO INTELIGENTE (COM THUMBNAILS)
+
+// 1. Script injetado que entende JSON
+const spyScript = `
+(function() {
+    // Função recursiva para caçar vídeos e thumbs dentro de objetos JSON
+    function scanObjectForMedia(obj) {
+        if (!obj || typeof obj !== 'object') return;
+
+        // Se for array, varre cada item
+        if (Array.isArray(obj)) {
+            obj.forEach(item => scanObjectForMedia(item));
+            return;
+        }
+
+        // Se for objeto, procura pares de vídeo/imagem
+        let foundVideo = null;
+        let foundImage = null;
+        
+        const keys = Object.keys(obj);
+        
+        // Passo 1: Identifica candidatos
+        keys.forEach(key => {
+            const value = obj[key];
+            if (typeof value === 'string') {
+                // É vídeo? (mp4, m3u8, mpd, mov)
+                if (value.match(/https?:.*\\.(mp4|m3u8|mpd|mov)(\\?.*)?$/i)) {
+                    foundVideo = value;
+                }
+                // É imagem? (jpg, png, webp, jpeg)
+                else if (value.match(/https?:.*\\.(jpg|jpeg|png|webp)(\\?.*)?$/i)) {
+                    // Prioriza imagens que tenham "thumb", "poster" ou "preview" no nome da chave ou valor
+                    if (!foundImage || key.match(/thumb|poster|cover|preview/i)) {
+                        foundImage = value;
+                    }
+                }
+            }
+            // Continua a busca profunda (recursão)
+            else if (typeof value === 'object') {
+                scanObjectForMedia(value);
+            }
+        });
+
+        // Passo 2: Se achou vídeo neste nível, manda pra extensão
+        if (foundVideo) {
+            // Limpa barras invertidas de JSON
+            const cleanVideo = foundVideo.replace(/\\\\/g, '/');
+            const cleanThumb = foundImage ? foundImage.replace(/\\\\/g, '/') : null;
+
+            window.dispatchEvent(new CustomEvent('VideoDownloader_Found', {
+                detail: { 
+                    url: cleanVideo,
+                    thumbnail: cleanThumb
+                }
+            }));
+        }
+    }
+
+    function tryParseAndScan(data) {
+        if (typeof data !== 'string') return;
+        
+        try {
+            // Tenta tratar como JSON
+            const json = JSON.parse(data);
+            scanObjectForMedia(json);
+        } catch (e) {
+            // Se falhar o JSON, usa o método antigo (Regex Bruta) como fallback
+            // mas agora tentando pegar thumbs vizinhas é muito difícil via Regex, 
+            // então foca no JSON que é 99% dos casos de carrossel.
+        }
+    }
+
+    // --- INTERCEPTA FETCH ---
+    const originalFetch = window.fetch;
+    window.fetch = async function(...args) {
+        const response = await originalFetch(...args);
+        const clone = response.clone();
+        clone.text().then(text => tryParseAndScan(text)).catch(() => {});
+        return response;
+    };
+
+    // --- INTERCEPTA XHR ---
+    const originalOpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function(...args) {
+        this.addEventListener('load', function() {
+            tryParseAndScan(this.responseText);
+        });
+        originalOpen.apply(this, args);
+    };
+})();
+`;
+
+// 2. Classe Principal
 class VideoDetector {
     constructor() {
         this.detectedVideos = new Map();
-        this.isInitialized = false;
         this.initialize();
     }
 
     initialize() {
-        if (this.isInitialized) return;
-        this.isInitialized = true;
-        
-        console.log('Video Detector Inicializado - Cloudflare Ready');
-        this.startMonitoring();
+        this.injectSpy();
         this.setupMessageListener();
-        
-        setTimeout(() => {
-            this.detectAllVideos();
-            this.notifyExtension();
-        }, 1000);
+        this.startDomMonitoring();
+        setTimeout(() => this.scanDom(), 1000);
     }
 
-    startMonitoring() {
-        const observer = new MutationObserver((mutations) => {
-            let shouldCheck = false;
-            mutations.forEach((mutation) => {
-                mutation.addedNodes.forEach((node) => {
-                    if (node.nodeType === 1 && (
-                        node.tagName === 'IFRAME' || 
-                        (node.querySelector && node.querySelector('iframe[src*="cloudflarestream"]'))
-                    )) {
-                        shouldCheck = true;
-                    }
-                });
-            });
-            
-            if (shouldCheck) {
-                setTimeout(() => this.detectAllVideos(), 500);
-            }
-        });
+    injectSpy() {
+        const script = document.createElement('script');
+        script.textContent = spyScript;
+        (document.head || document.documentElement).appendChild(script);
+        script.remove();
 
-        observer.observe(document, {
-            childList: true,
-            subtree: true,
-            attributes: true,
-            attributeFilter: ['src']
+        window.addEventListener('VideoDownloader_Found', (e) => {
+            if (e.detail && e.detail.url) {
+                this.addVideo(e.detail.url, 'api_json', null, { 
+                    thumbnail: e.detail.thumbnail 
+                });
+            }
         });
     }
 
     setupMessageListener() {
         chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-            console.log('Content script recebeu:', request.action);
-            
             if (request.action === 'detectVideos') {
-                this.detectAllVideos();
-                const response = {
-                    success: true,
-                    videos: Array.from(this.detectedVideos.values()),
-                    count: this.detectedVideos.size,
-                    timestamp: Date.now()
-                };
-                sendResponse(response);
-                return true;
-            }
-            
-            if (request.action === 'ping') {
+                this.scanDom();
                 sendResponse({ 
                     success: true, 
-                    message: 'Content script ativo',
-                    videoCount: this.detectedVideos.size
+                    videos: Array.from(this.detectedVideos.values()),
+                    count: this.detectedVideos.size
                 });
-                return true;
             }
-            
-            sendResponse({ success: false, error: 'Ação desconhecida' });
-            return true;
         });
     }
 
-    detectAllVideos() {
-        console.log('Executando detecção completa...');
-        const previousCount = this.detectedVideos.size;
-        this.detectedVideos.clear();
-        
-        this.detectCloudflareStreams();
-        this.detectVideoElements();
-        this.detectHlsUrls();
-        
-        const newCount = this.detectedVideos.size;
-        console.log(`Detecção concluída: ${newCount} vídeos encontrados`);
-        
-        if (newCount > 0 && newCount !== previousCount) {
-            this.notifyExtension();
-        }
-        
-        return newCount;
+    startDomMonitoring() {
+        const observer = new MutationObserver(() => this.scanDom());
+        observer.observe(document, { childList: true, subtree: true });
     }
 
-    detectCloudflareStreams() {
-        try {
-            const iframes = document.querySelectorAll('iframe[src*="cloudflarestream"]');
-            console.log(`Encontrados ${iframes.length} iframes Cloudflare`);
-            
-            iframes.forEach((iframe, index) => {
-                this.processCloudflareIframe(iframe, index);
-            });
-        } catch (error) {
-            console.error('Erro ao detectar Cloudflare:', error);
-        }
+    scanDom() {
+        // Varredura visual (Tags <video>, Iframes)
+        document.querySelectorAll('video').forEach(v => {
+            const src = v.currentSrc || v.src;
+            if (src && src.startsWith('http')) {
+                this.addVideo(src, 'video_tag', v, { thumbnail: v.poster });
+            }
+        });
+
+        document.querySelectorAll('iframe[src*="cloudflarestream"]').forEach(iframe => {
+            const match = iframe.src.match(/cloudflarestream\.com\/([^\/]+)\/iframe/);
+            if (match) {
+                const url = `https://customer-00w7xjj4f45btxqw.cloudflarestream.com/${match[1]}/manifest/video.m3u8`;
+                const thumb = `https://customer-00w7xjj4f45btxqw.cloudflarestream.com/${match[1]}/thumbnails/thumbnail.jpg`;
+                this.addVideo(url, 'cloudflare', iframe, { thumbnail: thumb });
+            }
+        });
     }
 
-    processCloudflareIframe(iframe, index) {
-        const src = iframe.src;
-        const jwtMatch = src.match(/cloudflarestream\.com\/([^\/]+)\/iframe/);
-        if (!jwtMatch || !jwtMatch[1]) return;
-        
-        const token = jwtMatch[1];
-        const manifestUrl = `https://customer-00w7xjj4f45btxqw.cloudflarestream.com/${token}/manifest/video.m3u8`;
-        const thumbnail = this.extractThumbnailFromUrl(src);
-        const title = this.extractVideoTitle(iframe);
-        
-        const videoData = {
-            id: `cloudflare-${token.substring(0, 12)}`,
-            type: 'cloudflare_stream',
-            url: manifestUrl,
+    addVideo(url, source, element = null, extraData = {}) {
+        if (!url || !url.startsWith('http')) return;
+        if (url.match(/\.(js|css|html|jpg|png|svg)/i)) return; // Ignora se a URL principal for imagem
+
+        const cleanKey = url.split('?')[0];
+
+        // Se já existe, atualiza a thumbnail se a nova for melhor
+        if (this.detectedVideos.has(cleanKey)) {
+            const existing = this.detectedVideos.get(cleanKey);
+            if (!existing.thumbnail && extraData.thumbnail) {
+                existing.thumbnail = extraData.thumbnail;
+                this.notifyExtension();
+            }
+            return;
+        }
+
+        // Tenta descobrir o título
+        let title = 'Vídeo Detectado';
+        if (element) {
+            title = element.getAttribute('title') || 
+                    element.getAttribute('aria-label') || 
+                    element.closest('[data-title]')?.getAttribute('data-title') ||
+                    document.title;
+        } else {
+            try {
+                const parts = url.split('?')[0].split('/');
+                const filename = parts[parts.length - 1];
+                if (filename && filename.length > 3) title = decodeURIComponent(filename);
+            } catch(e){}
+        }
+
+        this.detectedVideos.set(cleanKey, {
+            id: `vid-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+            url: url,
             title: title,
-            thumbnail: thumbnail,
-            duration: 0,
-            qualities: this.generatePlaceholderQualities(), // ← PLACEHOLDER
-            rawUrl: src,
-            videoId: token,
-            source: 'iframe',
-            detectedAt: Date.now()
-        };
-        
-        this.addVideo(videoData);
-    }
-
-    detectVideoElements() {
-        const videos = document.querySelectorAll('video[src]');
-        videos.forEach((video, index) => {
-            const videoData = {
-                id: `native-${index}-${Date.now()}`,
-                type: 'native_video',
-                url: video.src,
-                title: this.extractVideoTitle(video),
-                thumbnail: video.poster || '',
-                duration: video.duration || 0,
-                qualities: this.generatePlaceholderQualities(),
-                source: 'video_element'
-            };
-            this.addVideo(videoData);
-        });
-    }
-
-    detectHlsUrls() {
-        const elements = document.querySelectorAll('[src*=".m3u8"], [href*=".m3u8"], [data-src*=".m3u8"]');
-        elements.forEach((element, index) => {
-            const url = element.src || element.href || element.getAttribute('data-src');
-            if (url && url.includes('.m3u8')) {
-                const videoData = {
-                    id: `hls-${index}-${Date.now()}`,
-                    type: 'hls_stream',
-                    url: url,
-                    title: this.extractVideoTitle(element),
-                    thumbnail: '',
-                    duration: 0,
-                    qualities: this.generatePlaceholderQualities(),
-                    source: 'm3u8_url'
-                };
-                this.addVideo(videoData);
-            }
-        });
-    }
-
-    addVideo(videoData) {
-        if (!videoData.url) return;
-        
-        const enrichedVideo = {
-            ...videoData,
-            id: videoData.id || `video-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-            domain: window.location.hostname,
+            thumbnail: extraData.thumbnail || '', // Usa a thumb capturada do JSON
+            type: source,
             pageUrl: window.location.href,
-            qualities: videoData.qualities || this.generatePlaceholderQualities()
-        };
+            qualities: [{ id: 'auto', name: 'Automático', resolution: 'HD', size: '?' }]
+        });
         
-        this.detectedVideos.set(enrichedVideo.id, enrichedVideo);
+        this.notifyExtension();
     }
-
-    generatePlaceholderQualities() {
-        return [
-            { id: 'loading', name: 'Carregando...', resolution: '—', size: '—', bitrate: '—', codec: '—' }
-        ];
-    }
-
-    extractVideoTitle(element) {
-        return element.title || 
-               element.getAttribute('aria-label') ||
-               element.getAttribute('data-title') ||
-               element.closest('[data-title]')?.getAttribute('data-title') ||
-               element.closest('.video-title')?.textContent?.trim() ||
-               document.title ||
-               `Vídeo ${this.detectedVideos.size + 1}`;
-    }
-
-    extractThumbnailFromUrl(url) {
-        try {
-            const posterMatch = url.match(/poster=([^&]+)/);
-            if (posterMatch) return decodeURIComponent(posterMatch[1]);
-        } catch (e) {}
-        return '';
-    }
-
+    
     notifyExtension() {
-        const videos = Array.from(this.detectedVideos.values());
-        if (videos.length === 0) return;
-        
         try {
             chrome.runtime.sendMessage({
                 action: 'videosDetected',
-                videos: videos,
-                count: videos.length,
-                timestamp: Date.now(),
-                source: 'content_script'
+                count: this.detectedVideos.size
             });
-        } catch (error) {}
-    }
-
-    getDetectedVideos() {
-        return Array.from(this.detectedVideos.values());
+        } catch(e) {}
     }
 }
 
-const detector = new VideoDetector();
-window.videoDetector = detector;
-
-window.debugVideoDetection = function() {
-    console.log('=== DEBUG VIDEO DETECTION ===');
-    const videos = detector.getDetectedVideos();
-    console.log(`${videos.length} vídeos detectados:`);
-    videos.forEach(video => {
-        console.log(`${video.title}:`, video.url);
-    });
-    return videos;
-};
+new VideoDetector();

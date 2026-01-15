@@ -1,10 +1,9 @@
-// popup.js - CORRIGIDO
+// popup.js - VERSÃO ESTÁVEL (LISTA CARROSSEL + THUMBS)
 class VideoDownloaderPro {
   constructor() {
     this.currentVideos = [];
     this.selectedVideo = null;
-    this.selectedQuality = null;
-    this.initializeElements(); // Chama setupEventListeners internamente
+    this.initializeElements();
   }
 
   async initializeElements() {
@@ -15,7 +14,6 @@ class VideoDownloaderPro {
       videoDetail: document.getElementById('videoDetail'),
       previewThumb: document.getElementById('previewThumb'),
       previewTitle: document.getElementById('previewTitle'),
-      previewDuration: document.getElementById('previewDuration'),
       qualityGrid: document.getElementById('qualityGrid'),
       formatSelect: document.getElementById('formatSelect'),
       downloadBtn: document.getElementById('downloadBtn'),
@@ -25,8 +23,7 @@ class VideoDownloaderPro {
     };
     
     this.setupEventListeners();
-    this.setupMessageListener();
-    await this.checkRequiredTools(); // Chamada única
+    await this.checkRequiredTools();
   }
 
   setupEventListeners() {
@@ -38,35 +35,30 @@ class VideoDownloaderPro {
     try {
       const response = await fetch('http://localhost:3000/check-tools');
       const data = await response.json();
-      
-      // Ajuste conforme o retorno simplificado do server.js novo
       if (!data.tools.yt_dlp.installed || !data.tools.ffmpeg.installed) {
-        this.showError('Instale yt-dlp e ffmpeg no sistema para continuar.');
+        this.showError('Instale as ferramentas (yt-dlp/ffmpeg).');
         this.elements.downloadBtn.disabled = true;
-        return false;
       }
-      return true;
     } catch (error) {
-      this.showError('Erro ao conectar ao servidor local (node server.js).');
+      this.showError('Servidor offline. Rode: node server.js');
       this.elements.downloadBtn.disabled = true;
-      return false;
     }
   }
 
   async detectVideos() {
-    this.showLoading('Detectando...');
+    this.showLoading('Procurando vídeos...');
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       const response = await chrome.tabs.sendMessage(tab.id, { action: 'detectVideos' });
 
       if (response && response.videos.length > 0) {
         this.handleDetectedVideos(response.videos);
-        this.showStatus('Vídeos detectados!', 'success');
+        this.showStatus(`${response.videos.length} vídeos encontrados!`, 'success');
       } else {
-        this.showError('Nenhum vídeo detectado');
+        this.showError('Nenhum vídeo encontrado.');
       }
     } catch (error) {
-      this.showError('Recarregue a página e tente novamente.');
+      this.showError('Dê F5 na página e tente novamente.');
     }
   }
 
@@ -77,10 +69,19 @@ class VideoDownloaderPro {
     videos.forEach(video => {
       const card = document.createElement('div');
       card.className = 'video-card';
+      
+      let thumbSrc = video.thumbnail;
+      if (!thumbSrc || thumbSrc.includes('placeholder')) thumbSrc = 'icons/icon128.png';
+
       card.innerHTML = `
-        <div class="video-thumb"><img src="${video.thumbnail || ''}"></div>
-        <div class="video-info"><h3>${this.escapeHtml(video.title)}</h3></div>
+        <div class="video-thumb">
+            <img src="${thumbSrc}" onerror="this.src='icons/icon128.png'">
+        </div>
+        <div class="video-info">
+            <h3>${this.escapeHtml(video.title)}</h3>
+        </div>
       `;
+      
       card.addEventListener('click', () => {
         document.querySelectorAll('.video-card').forEach(c => c.classList.remove('active'));
         card.classList.add('active');
@@ -95,14 +96,19 @@ class VideoDownloaderPro {
   selectVideo(video) {
     this.selectedVideo = video;
     this.elements.videoDetail.classList.add('active');
+    
     this.elements.previewTitle.textContent = video.title;
-    this.elements.previewThumb.src = video.thumbnail || '';
+    
+    let thumbSrc = video.thumbnail;
+    if (!thumbSrc || thumbSrc.includes('placeholder')) thumbSrc = 'icons/icon128.png';
+    this.elements.previewThumb.src = thumbSrc;
+    this.elements.previewThumb.onerror = () => { this.elements.previewThumb.src = 'icons/icon128.png'; };
+
     this.loadRealQualities(video);
   }
 
   async loadRealQualities(video) {
-    this.elements.qualityGrid.innerHTML = '<div class="loading">Carregando formatos...</div>';
-    
+    this.elements.qualityGrid.innerHTML = '<div class="loading-container"><div class="spinner"></div> Analisando...</div>';
     try {
       const response = await fetch('http://localhost:3000/list-formats', {
         method: 'POST',
@@ -112,10 +118,9 @@ class VideoDownloaderPro {
       
       const result = await response.json();
       if (!result.success) throw new Error(result.error);
-      
       this.renderQualityOptions(result.formats);
     } catch (e) {
-      this.elements.qualityGrid.innerHTML = `<div class="quality-error">Erro: ${e.message}</div>`;
+      this.renderQualityOptions([{ id: 'best', name: 'Qualidade Automática', resolution: 'Padrão', size: '?' }]);
     }
   }
 
@@ -129,9 +134,7 @@ class VideoDownloaderPro {
         <div class="quality-res">${q.resolution}</div>
         <div class="quality-size">${q.size}</div>
       `;
-      
       if(i === 0) this.selectedQuality = q;
-      
       card.addEventListener('click', () => {
         document.querySelectorAll('.quality-card').forEach(c => c.classList.remove('selected'));
         card.classList.add('selected');
@@ -148,7 +151,7 @@ class VideoDownloaderPro {
 
     this.elements.progressBar.style.display = 'block';
     this.elements.progressFill.style.width = '0%';
-    this.showStatus('Iniciando...', 'info');
+    this.showStatus('Solicitando...', 'info');
 
     fetch('http://localhost:3000/download', {
       method: 'POST',
@@ -164,10 +167,7 @@ class VideoDownloaderPro {
     .then(res => res.json())
     .then(data => {
       if (!data.success) throw new Error(data.error);
-      
-      // Conectar WebSocket
       const ws = new WebSocket(`ws://localhost:3000/progress?id=${data.downloadId}`);
-      
       ws.onmessage = (event) => {
         const msg = JSON.parse(event.data);
         if (msg.type === 'progress') {
@@ -183,8 +183,7 @@ class VideoDownloaderPro {
           ws.close();
         }
       };
-      
-      ws.onerror = () => this.showStatus('Erro na conexão WebSocket', 'error');
+      ws.onerror = () => this.showStatus('Erro WebSocket', 'error');
     })
     .catch(err => {
       this.showStatus(`Erro: ${err.message}`, 'error');
@@ -194,13 +193,13 @@ class VideoDownloaderPro {
   showStatus(msg, type) {
     const el = this.elements.downloadStatus;
     el.textContent = msg;
-    el.style.color = type === 'error' ? 'red' : (type === 'success' ? 'green' : 'orange');
+    el.style.color = type === 'error' ? '#ef4444' : (type === 'success' ? '#10b981' : '#f1f5f9');
   }
 
   showLoading(msg) { this.showStatus(msg, 'info'); }
   showError(msg) { this.showStatus(msg, 'error'); }
   
-  setupMessageListener() { /* Mantido simples */ }
+  setupMessageListener() { /* Mantido */ }
   escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
