@@ -1,0 +1,67 @@
+# --- Dependências do Node.js ---
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json # Opcional: Alguns preferem commitar, outros não. Geralmente se commita.
+# Se quiser ignorar o package-lock, descomente a linha acima.
+
+# --- Arquivos de Ambiente (Segurança) ---
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# --- Pasta de Downloads (IMPORTANTE) ---
+# Ignora os vídeos baixados para não lotar o repositório
+downloads/
+files/
+
+# --- Arquivos de Mídia Temporários ou Soltos ---
+*.mp4
+*.mkv
+*.webm
+*.mp3
+*.m4a
+*.flv
+*.avi
+*.mov
+*.wmv
+*.ts
+*.m3u8
+*.part
+*.ytdl
+
+# --- Arquivos de Sistema Operacional ---
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# --- Logs e Arquivos Temporários ---
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# --- IDEs e Editores de Código ---
+.idea/
+.vscode/
+*.swp
+*.swo
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# --- Ferramentas Binárias Locais (Opcional) ---
+# Se você baixou os executáveis para a pasta do projeto e não quer subir
+# yt-dlp.exe
+# ffmpeg.exe
+# ffprobe.exe
