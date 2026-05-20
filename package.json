@@ -1,7 +1,7 @@
 {
   "name": "videodownloaderpro",
   "version": "1.0.0",
-  "description": "",
+  "description": "Extensao Chrome para detectar midias em paginas web e baixar arquivos diretos, HLS e DASH com apoio de um servidor local Node.js.",
   "main": "background.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"

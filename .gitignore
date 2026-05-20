@@ -1,27 +1,64 @@
-# --- Dependências do Node.js ---
+# --- Dependencias do Node.js ---
 node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-package-lock.json # Opcional: Alguns preferem commitar, outros não. Geralmente se commita.
-# Se quiser ignorar o package-lock, descomente a linha acima.
 
-# --- Arquivos de Ambiente (Segurança) ---
+# package-lock.json deve ser commitado neste projeto para builds reproduziveis.
+
+# --- Arquivos de ambiente e segredos ---
 .env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+.env.*
+!.env.example
+*.local
+*.secret
+*.secrets
+secrets/
+private/
+credentials/
+config.local.*
 
-# --- Pasta de Downloads (IMPORTANTE) ---
-# Ignora os vídeos baixados para não lotar o repositório
+# Chaves, certificados e credenciais exportadas
+*.pem
+*.key
+*.crt
+*.cer
+*.p12
+*.pfx
+*.jks
+*.keystore
+id_rsa*
+id_dsa*
+id_ecdsa*
+id_ed25519*
+*.kdbx
+*.ppk
+credentials.json
+client_secret*.json
+service-account*.json
+google-credentials*.json
+token.json
+tokens.json
+cookies.txt
+cookies.sqlite
+Login Data
+Local State
+
+# --- Dados gerados pelo app ---
+# Ignora downloads, thumbs e previews para nao lotar o repositorio nem expor dados locais.
 downloads/
 files/
+video-downloader-server/downloads/
+video-downloader-server/thumbs/
+popup-preview.*
+*-preview.png
+*-preview.jpg
+*.har
+*.webm
 
-# --- Arquivos de Mídia Temporários ou Soltos ---
+# --- Arquivos de midia temporarios ou soltos ---
 *.mp4
 *.mkv
-*.webm
 *.mp3
 *.m4a
 *.flv
@@ -33,7 +70,7 @@ files/
 *.part
 *.ytdl
 
-# --- Arquivos de Sistema Operacional ---
+# --- Arquivos de sistema operacional ---
 .DS_Store
 .DS_Store?
 ._*
@@ -42,14 +79,13 @@ files/
 ehthumbs.db
 Thumbs.db
 
-# --- Logs e Arquivos Temporários ---
-logs
+# --- Logs e arquivos temporarios ---
+logs/
 *.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
+*.tmp
+*.temp
 
-# --- IDEs e Editores de Código ---
+# --- IDEs e editores de codigo ---
 .idea/
 .vscode/
 *.swp
@@ -60,8 +96,10 @@ yarn-error.log*
 *.sln
 *.sw?
 
-# --- Ferramentas Binárias Locais (Opcional) ---
-# Se você baixou os executáveis para a pasta do projeto e não quer subir
-# yt-dlp.exe
-# ffmpeg.exe
-# ffprobe.exe
+# --- Ferramentas binarias locais ---
+yt-dlp.exe
+ffmpeg.exe
+ffprobe.exe
+yt-dlp
+ffmpeg
+ffprobe
