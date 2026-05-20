@@ -13,6 +13,7 @@ const DIRECT_MEDIA_MIME_RE = /^(video|audio)\//i;
 
 const SERVER_BASE = "http://localhost:3000";
 const SETTINGS_KEY = "videoDownloaderSettings";
+const PAGE_THUMB_CACHE_TTL_MS = 15000;
 
 const store = {
   hitsById: {},
@@ -32,6 +33,7 @@ const defaultSettings = {
 let settings = { ...defaultSettings };
 let persistTimer = null;
 let loaded = false;
+const pageThumbCache = new Map();
 
 init().catch(err => {
   console.error("Init error:", err);
@@ -192,8 +194,10 @@ async function registerNetworkMedia(details, type, contentType, headers) {
   const tab = await safeGetTab(details.tabId);
   const pageUrl = tab?.url || "";
   const pageTitle = tab?.title || "";
+  const headerFilename = filenameFromContentDisposition(headers["content-disposition"]);
 
   if (shouldIgnoreUrl(pageUrl) || isBlacklisted(details.url)) return;
+  const pageThumbnail = await collectPageThumbnailFromTab(details.tabId, pageUrl);
 
   const hit = await buildHitFromUrl({
     url: details.url,
@@ -202,7 +206,10 @@ async function registerNetworkMedia(details, type, contentType, headers) {
     headers,
     tabId: details.tabId,
     pageUrl,
-    titleHint: pageTitle,
+    titleHint: headerFilename || pageTitle,
+    headerFilename,
+    thumbnail: pageThumbnail,
+    contentLength: contentLengthFromHeaders(headers),
     source: "network"
   });
 
@@ -225,6 +232,7 @@ async function registerCandidate(item, sender, source) {
   const tab = await safeGetTab(tabId);
   const pageUrl = item.pageUrl || tab?.url || "";
   const pageTitle = item.title || tab?.title || "";
+  const pageThumbnail = item.thumbnail || await collectPageThumbnailFromTab(tabId, pageUrl);
 
   if (shouldIgnoreUrl(item.url) || shouldIgnoreUrl(pageUrl) || isBlacklisted(item.url)) {
     return;
@@ -238,7 +246,7 @@ async function registerCandidate(item, sender, source) {
     tabId,
     pageUrl,
     titleHint: pageTitle,
-    thumbnail: item.thumbnail || null,
+    thumbnail: pageThumbnail || null,
     source
   });
 
@@ -286,6 +294,8 @@ async function buildHitFromUrl({
   tabId,
   pageUrl,
   titleHint,
+  headerFilename = "",
+  contentLength = null,
   thumbnail = null,
   source
 }) {
@@ -295,7 +305,8 @@ async function buildHitFromUrl({
   if (!cleanUrl) return null;
   if (SEGMENT_RE.test(cleanUrl)) return null;
 
-  const title = normalizeTitle(titleHint || filenameFromUrl(cleanUrl) || "Mídia detectada");
+  const title = normalizeTitle(titleHint || headerFilename || filenameFromUrl(cleanUrl) || "Mídia detectada");
+  const filenameHint = headerFilename || titleHint;
 
   const baseInfo = {
     id: "",
@@ -303,9 +314,10 @@ async function buildHitFromUrl({
     tabId,
     page_url: cleanPageUrl,
     title,
-    filename: suggestFilename(cleanUrl, type, titleHint),
+    filename: suggestFilename(cleanUrl, type, filenameHint),
     status: "active",
     mime: mime || mimeFromUrl(cleanUrl),
+    length: Number.isFinite(contentLength) ? contentLength : null,
     type,
     url: cleanUrl,
     source,
@@ -353,7 +365,8 @@ async function buildHitFromUrl({
       audio_only: isAudioMime(baseInfo.mime),
       width: null,
       height: null,
-      bandwidth: null
+      bandwidth: null,
+      content_length: baseInfo.length
     };
     baseInfo.fingerprint = buildFileFingerprint(cleanPageUrl, title, cleanUrl);
   }
@@ -922,6 +935,78 @@ async function safeGetTab(tabId) {
   }
 }
 
+async function collectPageThumbnailFromTab(tabId, pageUrl = "") {
+  if (typeof tabId !== "number" || tabId < 0 || !chrome.scripting?.executeScript) {
+    return "";
+  }
+
+  const cacheKey = `${tabId}:${pageUrl || ""}`;
+  const cached = pageThumbCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < PAGE_THUMB_CACHE_TTL_MS) {
+    return cached.url;
+  }
+
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        const normalize = (value) => {
+          try {
+            return new URL(value || "", window.location.href).href;
+          } catch {
+            return "";
+          }
+        };
+
+        const isUsefulImage = (url) => {
+          if (!url || /^data:/i.test(url)) return false;
+          return !/sprite|avatar|icon|logo|emoji|badge|spacer/i.test(url);
+        };
+
+        const selectors = [
+          ["meta[property='og:image:secure_url']", "content"],
+          ["meta[property='og:image']", "content"],
+          ["meta[property='og:image:url']", "content"],
+          ["meta[name='twitter:image']", "content"],
+          ["meta[name='twitter:image:src']", "content"],
+          ["link[rel='thumbnail']", "href"],
+          ["link[rel='image_src']", "href"],
+          ["link[as='image']", "href"],
+          ["video[poster]", "poster"],
+          ["#vp-preview", "data-thumb"]
+        ];
+
+        for (const [selector, attr] of selectors) {
+          for (const node of document.querySelectorAll(selector)) {
+            const candidate = normalize(node.getAttribute(attr));
+            if (isUsefulImage(candidate)) return candidate;
+          }
+        }
+
+        const largest = [...document.images]
+          .map(img => {
+            const src = normalize(img.currentSrc || img.src || "");
+            const width = img.naturalWidth || img.width || 0;
+            const height = img.naturalHeight || img.height || 0;
+            return { src, width, height, area: width * height };
+          })
+          .filter(img => isUsefulImage(img.src) && img.width >= 200 && img.height >= 100)
+          .sort((a, b) => b.area - a.area)[0];
+
+        return largest?.src || "";
+      }
+    });
+
+    const url = typeof results?.[0]?.result === "string" ? results[0].result : "";
+    pageThumbCache.set(cacheKey, { url, at: Date.now() });
+    return url;
+  } catch (error) {
+    addLog("warn", `Falha ao coletar thumbnail da página: ${error.message}`);
+    pageThumbCache.set(cacheKey, { url: "", at: Date.now() });
+    return "";
+  }
+}
+
 function guessTypeFromUrl(url) {
   if (HLS_RE.test(url)) return "hls";
   if (DASH_RE.test(url)) return "dash";
@@ -966,6 +1051,37 @@ function headerArrayToObject(headers) {
     out[h.name.toLowerCase()] = h.value || "";
   }
   return out;
+}
+
+function contentLengthFromHeaders(headers = {}) {
+  const directLength = Number.parseInt(headers["content-length"], 10);
+  if (Number.isFinite(directLength)) return directLength;
+
+  const range = String(headers["content-range"] || "").match(/\/(\d+)$/);
+  if (range) {
+    const rangedLength = Number.parseInt(range[1], 10);
+    if (Number.isFinite(rangedLength)) return rangedLength;
+  }
+
+  return null;
+}
+
+function filenameFromContentDisposition(value = "") {
+  const header = String(value || "");
+  if (!header) return "";
+
+  const utf8Match = header.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
+  if (utf8Match) {
+    try {
+      return decodeURIComponent(utf8Match[1].trim().replace(/^"|"$/g, ""));
+    } catch {}
+  }
+
+  const quotedMatch = header.match(/filename\s*=\s*"([^"]+)"/i);
+  if (quotedMatch) return quotedMatch[1].trim();
+
+  const plainMatch = header.match(/filename\s*=\s*([^;]+)/i);
+  return plainMatch ? plainMatch[1].trim().replace(/^"|"$/g, "") : "";
 }
 
 function makeId(input) {
