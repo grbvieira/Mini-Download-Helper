@@ -15,6 +15,15 @@ const hasExtensionRuntime =
 // Stores the URL of the tab that opened the popup.
 let currentActiveTabUrl = "";
 
+document.getElementById("settingsBtn").addEventListener("click", async () => {
+  if (!hasExtensionRuntime) return;
+  if (chrome.runtime.openOptionsPage) {
+    await chrome.runtime.openOptionsPage();
+  } else {
+    await chrome.tabs.create({ url: chrome.runtime.getURL("options.html") });
+  }
+});
+
 document.getElementById("clearAllBtn").addEventListener("click", async () => {
   if (!hasExtensionRuntime) return;
   await chrome.runtime.sendMessage({ type: "CLEAR_ALL" });
