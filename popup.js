@@ -9,35 +9,51 @@ const itemTemplate = document.getElementById("itemTemplate");
 const wsMap = new Map();
 let currentData = null;
 const userSelections = new Map();
+const hasExtensionRuntime =
+  typeof chrome !== "undefined" &&
+  chrome.runtime?.sendMessage &&
+  chrome.tabs?.query;
 
 // --- VARIÁVEL PARA GUARDAR A URL DA ABA ATUAL ---
 let currentActiveTabUrl = "";
 
 document.getElementById("clearAllBtn").addEventListener("click", async () => {
+  if (!hasExtensionRuntime) return;
   await chrome.runtime.sendMessage({ type: "CLEAR_ALL" });
   await refresh();
 });
 
 document.getElementById("clearDownloadedBtn").addEventListener("click", async () => {
+  if (!hasExtensionRuntime) return;
   await chrome.runtime.sendMessage({ type: "CLEAR_DOWNLOADED" });
   await refresh();
 });
 
 // Atualiza ao receber mensagem, aplicando o filtro de aba
-chrome.runtime.onMessage.addListener((message) => {
-  if (message?.type === "STORE_UPDATED" && message.data) {
-    const filteredData = filterDataForTab(message.data, currentActiveTabUrl);
-    render(filteredData);
-  }
-});
+if (hasExtensionRuntime) {
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message?.type === "STORE_UPDATED" && message.data) {
+      const filteredData = filterDataForTab(message.data, currentActiveTabUrl);
+      render(filteredData);
+    }
+  });
 
-// Ao inicializar o popup, puxa qual aba o usuário está olhando
-chrome.tabs.query({ active: true, currentWindow: true }).then(tabs => {
-  currentActiveTabUrl = tabs[0]?.url || "";
-  refresh().catch(console.error);
-});
+  // Ao inicializar o popup, puxa qual aba o usuário está olhando
+  chrome.tabs.query({ active: true, currentWindow: true }).then(tabs => {
+    currentActiveTabUrl = tabs[0]?.url || "";
+    refresh().catch(console.error);
+  });
+} else {
+  currentActiveTabUrl = "https://example.com/aulas/modulo-01";
+  render(buildPreviewData());
+}
 
 async function refresh() {
+  if (!hasExtensionRuntime) {
+    render(buildPreviewData());
+    return;
+  }
+
   const response = await chrome.runtime.sendMessage({ type: "GET_MAIN_DATA" });
 
   if (!response?.ok) {
@@ -580,6 +596,13 @@ async function runDisplayAction(action, displayHit, variantId, doRefresh = true)
   const variant = pickDisplayVariant(displayHit, variantId);
   let lastResult = { ok: true };
 
+  if (!hasExtensionRuntime) {
+    if (action === "copy") {
+      return { ok: true, copyText: variant?.media_url || displayHit.url };
+    }
+    return lastResult;
+  }
+
   if (action === "download" || action === "download_as" || action === "copy") {
     lastResult = await chrome.runtime.sendMessage({
       type: "ACTION_COMMAND",
@@ -721,13 +744,91 @@ async function patchProgress(hitId, patch) {
     ...patch
   };
 
-  await chrome.runtime.sendMessage({
-    type: "PATCH_PROGRESS",
-    hitId,
-    patch
-  }).catch(() => { });
+  if (hasExtensionRuntime) {
+    await chrome.runtime.sendMessage({
+      type: "PATCH_PROGRESS",
+      hitId,
+      patch
+    }).catch(() => { });
+  }
 
   render(currentData);
+}
+
+function buildPreviewData() {
+  const pageUrl = currentActiveTabUrl;
+  const now = Date.now();
+
+  return {
+    hits: [[
+      {
+        id: "preview_hls",
+        title: "Aula 03 - Introdução a streams adaptativos",
+        filename: "aula-03-streams-adaptativos.mp4",
+        page_url: pageUrl,
+        url: "https://media.example.com/aula-03/master.m3u8",
+        type: "hls",
+        status: "active",
+        thumbnail: "",
+        lastSeenAt: now,
+        variants: {
+          best: {
+            id: "best",
+            label: "Qualidade Máxima (Original)",
+            media_url: "https://media.example.com/aula-03/master.m3u8",
+            ext: "mp4",
+            width: 1920,
+            height: 1080,
+            bandwidth: 5000000,
+            audio_only: false,
+            sourceType: "hls"
+          },
+          hd: {
+            id: "hd",
+            label: "1280x720",
+            media_url: "https://media.example.com/aula-03/720p.m3u8",
+            ext: "mp4",
+            width: 1280,
+            height: 720,
+            bandwidth: 2800000,
+            audio_only: false,
+            sourceType: "hls"
+          }
+        }
+      },
+      {
+        id: "preview_file",
+        title: "Material complementar - áudio da aula",
+        filename: "audio-complementar.m4a",
+        page_url: pageUrl,
+        url: "https://media.example.com/audio-complementar.m4a",
+        type: "file",
+        status: "downloaded",
+        thumbnail: "",
+        lastSeenAt: now - 1000,
+        variants: {
+          default: {
+            id: "default",
+            label: "Arquivo (m4a)",
+            media_url: "https://media.example.com/audio-complementar.m4a",
+            ext: "m4a",
+            audio_only: true,
+            sourceType: "file"
+          }
+        }
+      }
+    ]],
+    logs: [
+      { type: "info", message: "Preview local do popup carregado", at: now },
+      { type: "info", message: "Na extensão, esta lista vem do background.js", at: now }
+    ],
+    progress: {
+      preview_file: {
+        percent: 100,
+        text: "Concluído"
+      }
+    }
+  };
 }
 
 async function patchStatus(hitId, status) {
@@ -741,11 +842,13 @@ async function patchStatus(hitId, status) {
     }
   }
 
-  await chrome.runtime.sendMessage({
-    type: "PATCH_STATUS",
-    hitId,
-    status
-  }).catch(() => { });
+  if (hasExtensionRuntime) {
+    await chrome.runtime.sendMessage({
+      type: "PATCH_STATUS",
+      hitId,
+      status
+    }).catch(() => { });
+  }
 
   render(currentData);
 }
@@ -905,12 +1008,13 @@ function bestVariantScore(hit) {
 
 function createPlaceholderThumb(type) {
   const text = encodeURIComponent((type || "media").toUpperCase());
-  return `data:image/svg+xml;charset=utf-8,` +
+  const svg =
     `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180" viewBox="0 0 320 180">` +
     `<rect width="320" height="180" fill="#0d1117"/>` +
     `<rect x="20" y="20" width="280" height="140" rx="12" fill="#161b22" stroke="#2b3445"/>` +
     `<text x="160" y="98" font-family="Arial" font-size="24" fill="#8ea6c9" text-anchor="middle">${text}</text>` +
     `</svg>`;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
 
 function filenameFromUrl(url) {

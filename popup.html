@@ -1,419 +1,93 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="pt-BR">
 <head>
-  <meta charset="UTF-8">
-  <title>Video Downloader Pro</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-  <style>
-    :root {
-      --primary: #3b82f6;
-      --primary-dark: #2563eb;
-      --primary-gradient: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
-      
-      --bg-main: #0f172a;
-      --bg-sidebar: #1e293b;
-      --bg-card: #334155;
-      --bg-card-hover: #475569;
-      
-      --text-main: #f1f5f9;
-      --text-muted: #94a3b8;
-      
-      --success: #10b981;
-      --error: #ef4444;
-      --warning: #f59e0b;
-      
-      --border: rgba(255, 255, 255, 0.1);
-    }
-
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-
-    body { 
-      /* AJUSTE: Largura reduzida para evitar scroll horizontal */
-      width: 750px; 
-      height: 600px; 
-      background: var(--bg-main); 
-      color: var(--text-main); 
-      font-family: 'Inter', sans-serif; 
-      overflow: hidden; /* Força a não ter scroll na janela inteira */
-      font-size: 14px;
-      -webkit-font-smoothing: antialiased;
-    }
-
-    /* Scrollbar Fina */
-    ::-webkit-scrollbar { width: 5px; }
-    ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: var(--bg-card); border-radius: 3px; }
-    ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
-
-    .app-container { 
-      display: grid; 
-      grid-template-rows: auto 1fr auto; 
-      height: 100%; 
-      width: 100%;
-      overflow: hidden;
-    }
-
-    /* === HEADER === */
-    .header { 
-      background: var(--bg-sidebar); 
-      padding: 12px 20px; 
-      border-bottom: 1px solid var(--border); 
-      display: flex; 
-      justify-content: space-between; 
-      align-items: center; 
-      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-      z-index: 10;
-      flex-shrink: 0;
-    }
-    
-    .logo { 
-      display: flex; 
-      align-items: center; 
-      gap: 10px; 
-      font-weight: 700; 
-      font-size: 16px;
-      color: white;
-    }
-    .logo i { 
-      background: var(--primary-gradient);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      font-size: 20px; 
-    }
-
-    .btn {
-      padding: 8px 16px;
-      border: none;
-      border-radius: 6px;
-      font-family: inherit;
-      font-size: 13px;
-      font-weight: 600;
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      transition: all 0.2s ease;
-    }
-
-    .btn-primary {
-      background: var(--primary-gradient);
-      color: white;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-    }
-    .btn-primary:hover:not(:disabled) { 
-      filter: brightness(1.1);
-      transform: translateY(-1px);
-    }
-    .btn:disabled { opacity: 0.5; cursor: not-allowed; filter: grayscale(1); }
-
-    /* === LAYOUT PRINCIPAL === */
-    .main-content { 
-      display: grid; 
-      /* AJUSTE: Sidebar reduzida de 320px para 260px */
-      grid-template-columns: 260px 1fr; 
-      height: 100%; 
-      overflow: hidden; 
-    }
-
-    /* === SIDEBAR === */
-    .sidebar { 
-      background: var(--bg-sidebar); 
-      border-right: 1px solid var(--border); 
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-    }
-
-    .sidebar-header {
-      padding: 12px 16px;
-      font-size: 11px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      color: var(--text-muted);
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      background: rgba(0,0,0,0.1);
-      flex-shrink: 0;
-    }
-
-    .video-count {
-      background: var(--primary);
-      color: white;
-      padding: 1px 6px;
-      border-radius: 8px;
-      font-size: 10px;
-    }
-
-    .videos-list { 
-      padding: 10px;
-      overflow-y: auto;
-      overflow-x: hidden; /* Garante sem scroll horizontal na lista */
-      flex: 1;
-      display: flex; 
-      flex-direction: column; 
-      gap: 6px; 
-    }
-
-    .video-card { 
-      background: rgba(255,255,255,0.03); 
-      border-radius: 8px; 
-      padding: 8px; 
-      cursor: pointer; 
-      transition: all 0.2s; 
-      border: 1px solid transparent; 
-      display: flex; 
-      gap: 10px;
-      position: relative;
-    }
-    .video-card:hover { background: rgba(255,255,255,0.08); }
-    .video-card.active { 
-      background: rgba(59, 130, 246, 0.15);
-      border-color: var(--primary);
-    }
-    .video-card.active::before {
-      content: '';
-      position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px;
-      background: var(--primary); border-radius: 0 4px 4px 0;
-    }
-
-    .video-thumb { 
-      width: 70px; /* Reduzido levemente */
-      height: 40px; 
-      background: #000; 
-      border-radius: 4px; 
-      overflow: hidden; 
-      flex-shrink: 0;
-    }
-    .video-thumb img { width: 100%; height: 100%; object-fit: cover; opacity: 0.9; }
-
-    .video-info { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; }
-    .video-info h3 { 
-      font-size: 12px; 
-      font-weight: 500; 
-      white-space: nowrap; 
-      overflow: hidden; 
-      text-overflow: ellipsis; 
-      color: var(--text-main);
-    }
-
-    /* === ÁREA DE CONTEÚDO === */
-    .content-area { 
-      padding: 20px; 
-      overflow-y: auto; 
-      overflow-x: hidden;
-      background: radial-gradient(circle at top right, #1e293b 0%, #0f172a 60%);
-    }
-
-    .empty-state {
-      text-align: center;
-      padding: 60px 20px;
-      color: var(--text-muted);
-    }
-    .empty-icon {
-      font-size: 32px;
-      margin-bottom: 16px;
-      color: var(--bg-card-hover);
-    }
-
-    .video-detail { display: none; }
-    .video-detail.active { display: block; animation: fadeIn 0.3s; }
-    @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
-
-    /* Preview Hero Compacto */
-    .preview-hero {
-      display: flex;
-      gap: 16px;
-      margin-bottom: 20px;
-      background: rgba(255,255,255,0.03);
-      padding: 16px;
-      border-radius: 12px;
-      border: 1px solid var(--border);
-    }
-    .preview-large-thumb {
-      width: 180px; /* Reduzido para caber melhor */
-      aspect-ratio: 16/9;
-      background: black;
-      border-radius: 6px;
-      overflow: hidden;
-      flex-shrink: 0;
-    }
-    .preview-large-thumb img { width: 100%; height: 100%; object-fit: cover; }
-    
-    .preview-data { flex: 1; min-width: 0; }
-    .preview-title { 
-      font-size: 16px; 
-      font-weight: 700; 
-      line-height: 1.3; 
-      margin-bottom: 10px; 
-      /* AJUSTE: Quebra de palavra para não estourar lateralmente */
-      word-break: break-word; 
-      display: -webkit-box;
-      -webkit-line-clamp: 2;
-      -webkit-box-orient: vertical;
-      overflow: hidden;
-    }
-
-    .meta-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
-    .meta-tag { font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
-    .meta-tag i { width: 14px; text-align: center; color: var(--primary); }
-
-    /* Qualidade */
-    .section-title {
-      font-size: 13px;
-      font-weight: 600;
-      margin-bottom: 10px;
-      color: var(--text-muted);
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      border-bottom: 1px solid var(--border);
-      padding-bottom: 4px;
-    }
-
-    .quality-grid {
-      display: grid;
-      /* Grid responsivo */
-      grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
-      gap: 10px;
-      margin-bottom: 20px;
-    }
-
-    .quality-card {
-      background: var(--bg-card);
-      border: 2px solid transparent;
-      border-radius: 8px;
-      padding: 12px;
-      text-align: center;
-      cursor: pointer;
-      position: relative;
-    }
-    .quality-card:hover { transform: translateY(-2px); background: var(--bg-card-hover); }
-    .quality-card.selected { border-color: var(--primary); background: rgba(59, 130, 246, 0.1); }
-
-    .quality-name { font-weight: 700; font-size: 14px; margin-bottom: 2px; color: var(--text-main); }
-    .quality-res { font-size: 11px; color: var(--text-muted); }
-    .quality-size { 
-      margin-top: 6px; font-size: 10px; color: var(--primary); 
-      background: rgba(59, 130, 246, 0.1); display: inline-block; 
-      padding: 2px 6px; border-radius: 8px;
-    }
-
-    /* Select */
-    .custom-select-wrapper { position: relative; margin-bottom: 20px; }
-    .custom-select {
-      width: 100%; padding: 12px;
-      background: var(--bg-card); border: 1px solid var(--border);
-      border-radius: 8px; color: var(--text-main); font-size: 13px;
-      appearance: none; cursor: pointer;
-    }
-    .custom-select-arrow { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); pointer-events: none; color: var(--text-muted); }
-
-    /* Loading */
-    .loading-container { text-align: center; padding: 20px; font-size: 13px; color: var(--text-muted); }
-    .spinner {
-      border: 2px solid rgba(255,255,255,0.1); border-left-color: var(--primary);
-      border-radius: 50%; width: 20px; height: 20px;
-      animation: spin 1s linear infinite; margin: 0 auto 8px;
-    }
-    @keyframes spin { 100% { transform: rotate(360deg); } }
-
-    /* === FOOTER === */
-    .footer {
-      padding: 12px 20px;
-      background: var(--bg-sidebar);
-      border-top: 1px solid var(--border);
-      display: flex; flex-direction: column; gap: 10px;
-      flex-shrink: 0;
-    }
-
-    .status-line { display: flex; justify-content: space-between; align-items: center; font-size: 12px; }
-    .progress-track {
-      height: 4px; background: rgba(255,255,255,0.1); border-radius: 2px;
-      overflow: hidden; flex: 1; display: none; margin-left: 10px;
-    }
-    .progress-fill { height: 100%; background: var(--success); width: 0; transition: width 0.3s; }
-
-    .btn-download {
-      width: 100%; justify-content: center; padding: 12px;
-      font-size: 14px; letter-spacing: 0.5px;
-    }
-  </style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=430, initial-scale=1.0">
+  <title>Mini Download Helper</title>
+  <link rel="stylesheet" href="popup.css">
 </head>
 <body>
-  <div class="app-container">
-    <div class="header">
-      <div class="logo">
-        <i class="fas fa-play-circle"></i>
-        <span>Video Downloader Pro</span>
-      </div>
-      <button class="btn btn-primary" id="detectBtn">
-        <i class="fas fa-sync-alt"></i> Detectar
-      </button>
-    </div>
-
-    <div class="main-content">
-      <div class="sidebar">
-        <div class="sidebar-header">
-          <span>Vídeos</span>
-          <span class="video-count" id="videoCount">0</span>
-        </div>
-        <div class="videos-list" id="videosList"></div>
-      </div>
-
-      <div class="content-area">
-        <div class="empty-state" id="emptyContent">
-          <div class="empty-icon"><i class="fas fa-film"></i></div>
-          <p>Selecione um vídeo para baixar</p>
-        </div>
-
-        <div class="video-detail" id="videoDetail">
-          <div class="preview-hero">
-            <div class="preview-large-thumb">
-              <img id="previewThumb" src="" alt="Capa">
-            </div>
-            <div class="preview-data">
-              <div class="preview-title" id="previewTitle">Título</div>
-              <div class="meta-grid">
-                <div class="meta-tag"><i class="far fa-clock"></i> <span id="previewDuration">--:--</span></div>
-                <div class="meta-tag"><i class="far fa-eye"></i> <span id="previewViews">--</span></div>
-              </div>
-            </div>
-          </div>
-
-          <div class="section-title"><i class="fas fa-cog"></i> Qualidade</div>
-          <div class="quality-grid" id="qualityGrid">
-            <div class="loading-container"><div class="spinner"></div> Carregando...</div>
-          </div>
-
-          <div class="section-title"><i class="fas fa-file-video"></i> Formato</div>
-          <div class="custom-select-wrapper">
-            <select class="custom-select" id="formatSelect">
-              <option value="mp4">MP4 (Padrão)</option>
-              <option value="mkv">MKV</option>
-              <option value="webm">WebM</option>
-            </select>
-            <i class="fas fa-chevron-down custom-select-arrow"></i>
-          </div>
-        </div>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">MDH</div>
+      <div class="brand-copy">
+        <h1>Mini Download Helper</h1>
+        <div class="subtitle" id="subtitle">Carregando…</div>
       </div>
     </div>
 
-    <div class="footer">
-      <div class="status-line">
-        <div id="downloadStatus">Pronto</div>
-        <div class="progress-track" id="progressBar">
-          <div class="progress-fill" id="progressFill"></div>
+    <div class="topbar-actions">
+      <button id="clearDownloadedBtn" class="ghost" type="button" title="Remover downloads concluídos">Limpar concluídos</button>
+      <button id="clearAllBtn" class="ghost danger-ghost" type="button" title="Remover todos os itens detectados">Limpar tudo</button>
+    </div>
+  </header>
+
+  <main>
+    <section id="groups"></section>
+
+    <section id="logsSection">
+      <details>
+        <summary>Logs</summary>
+        <div id="logs"></div>
+      </details>
+    </section>
+  </main>
+
+  <!-- Template do grupo -->
+  <template id="groupTemplate">
+    <article class="group">
+      <div class="group-header">
+        <div class="group-title-wrap">
+          <div class="group-title"></div>
+          <a class="page-link" target="_blank" rel="noreferrer">Abrir página</a>
+          <div class="group-meta"></div>
         </div>
       </div>
-      <button class="btn btn-primary btn-download" id="downloadBtn" disabled>
-        <i class="fas fa-download"></i> BAIXAR AGORA
-      </button>
+
+      <div class="group-items"></div>
+    </article>
+  </template>
+
+  <!-- Template do item -->
+  <template id="itemTemplate">
+    <div class="item">
+      <div class="item-left">
+        <img class="thumb" alt="Thumbnail">
+      </div>
+
+      <div class="item-right">
+        <div class="line-1">
+          <div class="item-title"></div>
+          <span class="status"></span>
+        </div>
+
+        <div class="line-2">
+          <span class="item-type"></span>
+          <span class="dot">•</span>
+          <span class="item-file"></span>
+        </div>
+
+        <div class="line-3">
+          <select class="variant-select"></select>
+        </div>
+
+        <div class="progress-row hidden">
+          <div class="progress-bar">
+            <div class="progress-bar-inner"></div>
+          </div>
+          <span class="progress-text"></span>
+        </div>
+
+        <div class="actions">
+          <button class="download-btn primary" type="button">Baixar</button>
+          <button class="download-as-btn" type="button">Salvar como</button>
+          <button class="copy-btn compact" type="button" title="Copiar URL da mídia">Copiar</button>
+          <button class="pin-btn compact" type="button" title="Fixar item">Fixar</button>
+          <button class="forget-btn danger compact" type="button" title="Remover item">Remover</button>
+        </div>
+      </div>
     </div>
-  </div>
+  </template>
 
   <script src="popup.js"></script>
 </body>
