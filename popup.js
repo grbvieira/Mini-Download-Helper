@@ -94,6 +94,38 @@ function getBaseUrl(u) {
     return String(u || '');
   }
 }
+
+function safeUrl(url) {
+  try {
+    return new URL(url);
+  } catch {
+    return null;
+  }
+}
+
+function isYouTubeWatchUrl(url) {
+  return !!youtubeVideoId(url);
+}
+
+function normalizeYouTubeWatchUrl(url) {
+  const id = youtubeVideoId(url);
+  return id ? `https://www.youtube.com/watch?v=${encodeURIComponent(id)}` : "";
+}
+
+function youtubeVideoId(url) {
+  const parsed = safeUrl(url);
+  if (!parsed) return "";
+  if (!/(^|\.)youtube\.com$/i.test(parsed.hostname) && !/(^|\.)youtu\.be$/i.test(parsed.hostname)) return "";
+  if (/youtu\.be$/i.test(parsed.hostname)) return parsed.pathname.split("/").filter(Boolean)[0] || "";
+  if (/\/shorts\//i.test(parsed.pathname)) return parsed.pathname.split("/").filter(Boolean)[1] || "";
+  return parsed.searchParams.get("v") || "";
+}
+
+function isYouTubeMediaUrl(url) {
+  const parsed = safeUrl(url);
+  return !!parsed && /(^|\.)googlevideo\.com$/i.test(parsed.hostname) && /\/videoplayback$/i.test(parsed.pathname);
+}
+
 function render(data) {
   currentData = structuredCloneSafe(data);
 
@@ -142,15 +174,17 @@ function render(data) {
 }
 
 function buildDisplayGroups(rawGroups) {
-  const flattened = [];
+  const allHits = [];
 
   for (const group of rawGroups || []) {
     for (const hit of group || []) {
       if (isUsefulHitForDisplay(hit)) {
-        flattened.push(structuredCloneSafe(hit));
+        allHits.push(structuredCloneSafe(hit));
       }
     }
   }
+
+  const flattened = filterYouTubeFallbackHitsForDisplay(allHits);
 
   if (!flattened.length) return [];
 
@@ -484,7 +518,7 @@ function renderItem(hit, progress) {
   statusEl.setAttribute("data-status", pretty);
 
   node.querySelector(".item-type").textContent = prettyType(hit.type);
-  node.querySelector(".item-file").textContent = hit.filename || "sem nome";
+  node.querySelector(".item-file").textContent = buildItemInfo(hit);
 
   const select = node.querySelector(".variant-select");
   const variants = getSortedVariants(hit);
@@ -738,6 +772,39 @@ async function patchProgress(hitId, patch) {
   }
 
   render(currentData);
+}
+
+function filterYouTubeFallbackHitsForDisplay(hits) {
+  const richPages = new Set(
+    hits
+      .filter(isRichYouTubeDisplayHit)
+      .map(hit => normalizeYouTubeWatchUrl(hit.page_url || hit.url || ""))
+      .filter(Boolean)
+  );
+
+  if (!richPages.size) return hits;
+
+  return hits.filter(hit => {
+    if (isRichYouTubeDisplayHit(hit)) return true;
+    const pageKey = normalizeYouTubeWatchUrl(hit.page_url || "");
+    if (!pageKey || !richPages.has(pageKey)) return true;
+    return !isYouTubeFallbackDisplayHit(hit);
+  });
+}
+
+function isRichYouTubeDisplayHit(hit) {
+  return (
+    hit?.downloadStrategy === "ytdlp_page" ||
+    hit?.source === "youtube_page" ||
+    Object.values(hit?.variants || {}).some(variant => variant?.sourceType === "youtube_fmt")
+  ) && isYouTubeWatchUrl(hit?.page_url || hit?.url || "");
+}
+
+function isYouTubeFallbackDisplayHit(hit) {
+  if (!hit) return false;
+  if (isYouTubeMediaUrl(hit.url || "")) return true;
+  if (hit.source === "youtube_page" || hit.downloadStrategy === "ytdlp_page") return false;
+  return isYouTubeWatchUrl(hit.page_url || "") && hit.type === "file";
 }
 
 function buildPreviewData() {
@@ -1012,6 +1079,14 @@ function createPlaceholderThumb(type) {
     `<text x="160" y="98" font-family="Arial" font-size="24" fill="#8ea6c9" text-anchor="middle">${text}</text>` +
     `</svg>`;
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+function buildItemInfo(hit) {
+  const bits = [];
+  const duration = formatDuration(hit.duration);
+  if (duration) bits.push(duration);
+  if (hit.filename) bits.push(hit.filename);
+  return bits.join(" • ") || "sem nome";
 }
 
 function filenameFromUrl(url) {

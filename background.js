@@ -628,8 +628,9 @@ function normalizeLoose(value) {
 
 function getGroupedHits() {
   const groups = new Map();
+  const hits = filterYouTubeFallbackHits(Object.values(store.hitsById));
 
-  for (const hit of Object.values(store.hitsById)) {
+  for (const hit of hits) {
     if (!groups.has(hit.group)) groups.set(hit.group, []);
     groups.get(hit.group).push(hit);
   }
@@ -651,6 +652,39 @@ function getGroupedHits() {
   });
 
   return grouped;
+}
+
+function filterYouTubeFallbackHits(hits) {
+  const richPages = new Set(
+    hits
+      .filter(isRichYouTubeHit)
+      .map(hit => normalizeYouTubeWatchUrl(hit.page_url || hit.url || ""))
+      .filter(Boolean)
+  );
+
+  if (!richPages.size) return hits;
+
+  return hits.filter(hit => {
+    if (isRichYouTubeHit(hit)) return true;
+    const pageKey = normalizeYouTubeWatchUrl(hit.page_url || "");
+    if (!pageKey || !richPages.has(pageKey)) return true;
+    return !isYouTubeFallbackHit(hit);
+  });
+}
+
+function isRichYouTubeHit(hit) {
+  return (
+    hit?.downloadStrategy === "ytdlp_page" ||
+    hit?.source === "youtube_page" ||
+    Object.values(hit?.variants || {}).some(variant => variant?.sourceType === "youtube_fmt")
+  ) && isYouTubeWatchUrl(hit?.page_url || hit?.url || "");
+}
+
+function isYouTubeFallbackHit(hit) {
+  if (!hit) return false;
+  if (isYouTubeMediaUrl(hit.url || "")) return true;
+  if (hit.source === "youtube_page" || hit.downloadStrategy === "ytdlp_page") return false;
+  return isYouTubeWatchUrl(hit.page_url || "") && hit.type === "file";
 }
 
 function getMainData() {
