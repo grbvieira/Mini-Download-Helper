@@ -581,6 +581,7 @@ function describeVariantWithContext(variant, duplicateCounts) {
   const base = describeVariant(variant);
   if ((duplicateCounts.get(base) || 0) <= 1) return base;
 
+  if (variant.sourceType === "youtube_fmt") return `${base} • YouTube`;
   if (variant.sourceType === "hls") return `${base} • HLS`;
   if (variant.sourceType === "dash") return `${base} • DASH`;
   if (variant.sourceType === "file") return `${base} • MP4`;
@@ -844,6 +845,7 @@ function describeVariant(variant) {
   if (!variant) return "Auto";
 
   if (variant.label === "Qualidade Máxima (Original)") return variant.label;
+  if (variant.sourceType === "youtube_fmt" && variant.label) return normalizeVariantLabel(variant.label);
 
   if (variant.audio_only) {
     if (variant.bandwidth) {

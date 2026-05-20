@@ -5,6 +5,8 @@ const MEDIA_EXT_RE =
 const HLS_RE = /\.m3u8(?:$|\?)/i;
 const DASH_RE = /\.mpd(?:$|\?)/i;
 const SEGMENT_RE = /\.(m4s|ts|m4f|cmfa|cmfv)(?:$|\?)/i;
+const YOUTUBE_MEDIA_RE = /(?:^|\.)googlevideo\.com$/i;
+const YOUTUBE_PAGE_RE = /(?:^|\.)youtube\.com$|(?:^|\.)youtu\.be$/i;
 
 const HLS_MIME_RE =
   /application\/(?:vnd\.apple\.mpegurl|x-mpegurl)|audio\/mpegurl/i;
@@ -355,8 +357,15 @@ async function buildHitFromUrl({
     baseInfo.mime = "application/dash+xml";
     baseInfo.fingerprint = buildDashFingerprint(cleanPageUrl, title, cleanUrl, baseInfo.variants);
   } else {
-    const variantId = "default";
-    baseInfo.variants[variantId] = {
+    const youtubeVariant = buildYouTubeFormatVariant({
+      mediaUrl: cleanUrl,
+      pageUrl: cleanPageUrl,
+      mime: baseInfo.mime,
+      contentLength: baseInfo.length
+    });
+    const variantId = youtubeVariant?.id || "default";
+
+    baseInfo.variants[variantId] = youtubeVariant || {
       id: variantId,
       label: directLabelFromMime(baseInfo.mime, baseInfo.url),
       media_url: baseInfo.url,
@@ -368,7 +377,14 @@ async function buildHitFromUrl({
       bandwidth: null,
       content_length: baseInfo.length
     };
-    baseInfo.fingerprint = buildFileFingerprint(cleanPageUrl, title, cleanUrl);
+
+    if (youtubeVariant) {
+      baseInfo.downloadStrategy = "ytdlp_page";
+      baseInfo.filename = suggestFilename(cleanPageUrl, "youtube", baseInfo.title);
+      baseInfo.fingerprint = buildYouTubeFingerprint(cleanPageUrl);
+    } else {
+      baseInfo.fingerprint = buildFileFingerprint(cleanPageUrl, title, cleanUrl);
+    }
   }
 
   baseInfo.group = buildGroupKey(baseInfo);
@@ -458,6 +474,11 @@ function buildFileFingerprint(pageUrl, title, url) {
   const host = safeUrl(pageUrl)?.host || "";
   const basePath = manifestBasePath(url);
   return `file::${host}::${normalizeLoose(title)}::${basePath}`;
+}
+
+function buildYouTubeFingerprint(pageUrl) {
+  const videoId = youtubeVideoId(pageUrl);
+  return `youtube::${videoId || stripQuery(pageUrl)}`;
 }
 
 function hlsBasePath(masterUrl, mediaUrl) {
@@ -578,6 +599,37 @@ async function startDownload(hit, variantId, saveAs) {
 
   try {
     if (hit.type === "file") {
+      if (shouldUseYtDlpForFile(hit, variant)) {
+        const response = await fetch(`${SERVER_BASE}/download`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            url: hit.page_url || hit.url,
+            quality: ytdlpQualityForVariant(variant),
+            title: hit.title,
+            referer: hit.page_url || "https://example.com"
+          })
+        });
+
+        const json = await response.json();
+        if (!json.success) {
+          throw new Error(json.error || "Falha no servidor local");
+        }
+
+        hit.serverDownloadId = json.downloadId;
+        setProgress(hit.id, {
+          percent: 1,
+          text: `Enviado ao yt-dlp (${describeVariant(variant)})`,
+          serverDownloadId: json.downloadId
+        });
+
+        schedulePersist();
+        notifyPopup();
+        return { ok: true };
+      }
+
       const downloadId = await chrome.downloads.download({
         url: variant.media_url,
         filename: buildDownloadFilename(hit.filename || suggestFilename(variant.media_url, "file", hit.title)),
@@ -1224,6 +1276,124 @@ function isAudioMime(mime) {
   return /^audio\//i.test(mime || "");
 }
 
+function shouldUseYtDlpForFile(hit, variant) {
+  return (
+    hit?.downloadStrategy === "ytdlp_page" ||
+    variant?.sourceType === "youtube_fmt"
+  ) && isYouTubePageUrl(hit?.page_url || "");
+}
+
+function ytdlpQualityForVariant(variant) {
+  if (variant?.sourceType === "youtube_fmt" && variant.ytdlp_format_id && !variant.audio_only) {
+    if (variant.has_audio) return variant.ytdlp_format_id;
+    return `${variant.ytdlp_format_id}+bestaudio/best`;
+  }
+  return normalizeDefaultQuality(settings.defaultQuality);
+}
+
+function buildYouTubeFormatVariant({ mediaUrl, pageUrl, mime, contentLength }) {
+  if (!isYouTubePageUrl(pageUrl) || !isYouTubeMediaUrl(mediaUrl)) return null;
+
+  const parsed = safeUrl(mediaUrl);
+  const params = parsed?.searchParams;
+  const itag = params?.get("itag") || "";
+  const paramMime = params?.get("mime") || mime || mimeFromUrl(mediaUrl);
+  const meta = youtubeItagMeta(itag);
+  const audioOnly = /^audio\//i.test(paramMime) || meta.audioOnly;
+  const height = meta.height || numberParam(params, "height");
+  const width = meta.width || numberParam(params, "width");
+  const bitrate = numberParam(params, "bitrate");
+  const length = contentLength || numberParam(params, "clen");
+  const ext = meta.ext || extensionFromMime(paramMime) || "mp4";
+  const label = [
+    itag ? `FMT ${itag}` : "FMT",
+    audioOnly ? "audio" : height ? `${height}p` : "",
+    ext.toUpperCase()
+  ].filter(Boolean).join(" ");
+
+  return {
+    id: `yt_${hashString(`${pageUrl}::${itag || mediaUrl}`)}`,
+    label,
+    media_url: mediaUrl,
+    ext,
+    mime: paramMime || mime || "",
+    audio_only: audioOnly,
+    width,
+    height,
+    bandwidth: bitrate || null,
+    content_length: length || null,
+    has_audio: !!meta.hasAudio,
+    ytdlp_format_id: itag || "best",
+    sourceType: "youtube_fmt"
+  };
+}
+
+function isYouTubePageUrl(url) {
+  const parsed = safeUrl(url);
+  return !!parsed && YOUTUBE_PAGE_RE.test(parsed.hostname);
+}
+
+function isYouTubeMediaUrl(url) {
+  const parsed = safeUrl(url);
+  return !!parsed && YOUTUBE_MEDIA_RE.test(parsed.hostname) && /\/videoplayback$/i.test(parsed.pathname);
+}
+
+function youtubeVideoId(url) {
+  const parsed = safeUrl(url);
+  if (!parsed) return "";
+  if (/youtu\.be$/i.test(parsed.hostname)) return parsed.pathname.split("/").filter(Boolean)[0] || "";
+  if (/\/shorts\//i.test(parsed.pathname)) return parsed.pathname.split("/").filter(Boolean)[1] || "";
+  return parsed.searchParams.get("v") || "";
+}
+
+function numberParam(params, key) {
+  const value = Number.parseInt(params?.get(key) || "", 10);
+  return Number.isFinite(value) ? value : null;
+}
+
+function extensionFromMime(mime) {
+  const text = String(mime || "").toLowerCase();
+  if (text.includes("webm")) return "webm";
+  if (text.includes("mp4") || text.includes("m4a")) return "mp4";
+  if (text.includes("mpeg")) return "mp3";
+  return "";
+}
+
+function youtubeItagMeta(itag) {
+  const map = {
+    18: { height: 360, ext: "mp4", hasAudio: true },
+    22: { height: 720, ext: "mp4", hasAudio: true },
+    139: { audioOnly: true, ext: "m4a" },
+    133: { height: 240, ext: "mp4" },
+    134: { height: 360, ext: "mp4" },
+    135: { height: 480, ext: "mp4" },
+    136: { height: 720, ext: "mp4" },
+    137: { height: 1080, ext: "mp4" },
+    160: { height: 144, ext: "mp4" },
+    242: { height: 240, ext: "webm" },
+    243: { height: 360, ext: "webm" },
+    244: { height: 480, ext: "webm" },
+    247: { height: 720, ext: "webm" },
+    248: { height: 1080, ext: "webm" },
+    271: { height: 1440, ext: "webm" },
+    278: { height: 144, ext: "webm" },
+    313: { height: 2160, ext: "webm" },
+    394: { height: 144, ext: "mp4" },
+    395: { height: 240, ext: "mp4" },
+    396: { height: 360, ext: "mp4" },
+    397: { height: 480, ext: "mp4" },
+    398: { height: 720, ext: "mp4" },
+    399: { height: 1080, ext: "mp4" },
+    400: { height: 1440, ext: "mp4" },
+    401: { height: 2160, ext: "mp4" },
+    140: { audioOnly: true, ext: "m4a" },
+    249: { audioOnly: true, ext: "webm" },
+    250: { audioOnly: true, ext: "webm" },
+    251: { audioOnly: true, ext: "webm" }
+  };
+  return map[Number(itag)] || {};
+}
+
 function directLabelFromMime(mime, url) {
   const ext = extensionFromUrl(url) || "arquivo";
   if (isAudioMime(mime)) return `Áudio (${ext})`;
@@ -1565,6 +1735,7 @@ function describeVariant(variant) {
   if (!variant) return "Auto";
   // Preserve the custom label for the maximum-quality option.
   if (variant.label === "Qualidade Máxima (Original)") return variant.label;
+  if (variant.sourceType === "youtube_fmt" && variant.label) return variant.label;
 
   if (variant.audio_only) {
     if (variant.bandwidth) return `Áudio • ${Math.round(variant.bandwidth / 1000)} kbps`;
