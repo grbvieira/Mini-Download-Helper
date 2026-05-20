@@ -108,8 +108,11 @@ async function handleMessage(message, sender) {
       return await handleActionCommand(message);
 
     case "CLEAR_ALL":
-      clearAllHits();
+      await clearAllHits();
       return { ok: true };
+
+    case "CLEAR_THUMB_CACHE":
+      return await clearServerThumbCache();
 
     case "CLEAR_DOWNLOADED":
       clearDownloadedHits();
@@ -828,13 +831,30 @@ function setProgress(hitId, patch) {
   schedulePersist();
 }
 
-function clearAllHits() {
+async function clearAllHits() {
   store.hitsById = {};
   store.progress = {};
   store.directDownloadMap = {};
+  const thumbResult = await clearServerThumbCache();
+  if (!thumbResult.ok) {
+    addLog("warn", `Cache de thumbs nao foi limpo: ${thumbResult.error}`);
+  }
   addLog("info", "Lista limpa");
   schedulePersist();
   notifyPopup();
+}
+
+async function clearServerThumbCache() {
+  try {
+    const response = await fetch(`${SERVER_BASE}/clear-thumbs`, { method: "POST" });
+    const json = await response.json();
+    if (!json?.success) {
+      return { ok: false, error: json?.error || "Falha no servidor local" };
+    }
+    return { ok: true, deleted: Number(json.deleted || 0) };
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
 }
 
 function clearDownloadedHits() {

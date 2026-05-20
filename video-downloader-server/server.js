@@ -12,9 +12,15 @@ const PORT = 3000;
 const HOST = '127.0.0.1';
 const DOWNLOAD_DIR = path.join(__dirname, 'downloads');
 const THUMB_DIR = path.join(__dirname, 'thumbs');
+const THUMB_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const THUMB_CACHE_CLEAN_INTERVAL_MS = 60 * 60 * 1000;
 const activeDownloads = new Map();
 
 ensureDirs();
+cleanupThumbCache({ maxAgeMs: THUMB_CACHE_MAX_AGE_MS });
+setInterval(() => {
+  cleanupThumbCache({ maxAgeMs: THUMB_CACHE_MAX_AGE_MS });
+}, THUMB_CACHE_CLEAN_INTERVAL_MS).unref();
 
 function isAllowedOrigin(origin) {
   if (!origin) return true;
@@ -74,6 +80,64 @@ function ensureDirs() {
   if (!fs.existsSync(THUMB_DIR)) {
     fs.mkdirSync(THUMB_DIR, { recursive: true });
   }
+}
+
+function countFilesRecursively(dirPath) {
+  if (!fs.existsSync(dirPath)) return 0;
+
+  let count = 0;
+  for (const entry of fs.readdirSync(dirPath, { withFileTypes: true })) {
+    const fullPath = path.join(dirPath, entry.name);
+    if (entry.isDirectory()) {
+      count += countFilesRecursively(fullPath);
+    } else {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function cleanupThumbCache({ maxAgeMs = 0, removeAll = false } = {}) {
+  ensureDirs();
+
+  if (removeAll) {
+    const deleted = countFilesRecursively(THUMB_DIR);
+    fs.rmSync(THUMB_DIR, { recursive: true, force: true });
+    fs.mkdirSync(THUMB_DIR, { recursive: true });
+    return { deleted };
+  }
+
+  const now = Date.now();
+  let deleted = 0;
+
+  const cleanupDir = (dirPath) => {
+    if (!fs.existsSync(dirPath)) return;
+
+    for (const entry of fs.readdirSync(dirPath, { withFileTypes: true })) {
+      const fullPath = path.join(dirPath, entry.name);
+
+      if (entry.isDirectory()) {
+        cleanupDir(fullPath);
+        try {
+          if (fs.readdirSync(fullPath).length === 0) {
+            fs.rmdirSync(fullPath);
+          }
+        } catch { }
+        continue;
+      }
+
+      try {
+        const stats = fs.statSync(fullPath);
+        if (!maxAgeMs || now - stats.mtimeMs >= maxAgeMs) {
+          fs.unlinkSync(fullPath);
+          deleted += 1;
+        }
+      } catch { }
+    }
+  };
+
+  cleanupDir(THUMB_DIR);
+  return { deleted };
 }
 
 function sanitizeTitle(input) {
@@ -407,6 +471,19 @@ app.get('/check-tools', async (req, res) => {
 
 app.use('/files', express.static(DOWNLOAD_DIR));
 app.use('/thumbs', express.static(THUMB_DIR));
+
+app.post('/clear-thumbs', (req, res) => {
+  try {
+    const result = cleanupThumbCache({ removeAll: true });
+    res.json({ success: true, ...result });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'Falha ao limpar cache de thumbnails',
+      details: error.message
+    });
+  }
+});
 
 app.post('/list-formats', async (req, res) => {
   const { url, referer = 'https://example.com' } = req.body;
