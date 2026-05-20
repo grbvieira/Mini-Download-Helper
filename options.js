@@ -58,8 +58,7 @@ class SettingsManager {
         autoSaveElements.forEach(element => {
             element.addEventListener('change', () => {
                 this.debounce(() => {
-                    this.saveFormToSettings();
-                    this.showStatus('Configurações salvas automaticamente', 'success');
+                    this.saveSettings('Configurações salvas automaticamente');
                 }, 1000)();
             });
         });
@@ -177,7 +176,7 @@ class SettingsManager {
         this.settings.verboseLogging = this.getChecked('verboseLogging');
     }
 
-    async saveSettings() {
+    async saveSettings(successMessage = 'Configurações salvas com sucesso!') {
         try {
             this.saveFormToSettings();
             
@@ -187,11 +186,11 @@ class SettingsManager {
             
             // Notificar background script sobre mudanças
             await chrome.runtime.sendMessage({
-                action: 'saveSettings',
+                type: 'SAVE_SETTINGS',
                 settings: this.settings
             });
             
-            this.showStatus('Configurações salvas com sucesso!', 'success');
+            this.showStatus(successMessage, 'success');
             
             // Recarregar estatísticas se necessário
             if (this.currentTab === 'about') {
@@ -206,38 +205,25 @@ class SettingsManager {
 
     async testIntegration() {
         const statusElement = document.getElementById('integrationStatus');
-        statusElement.innerHTML = '<div>🧪 Testando integração com yt-dlp...</div>';
+        statusElement.textContent = 'Testando integração com servidor local...';
         statusElement.className = 'status info';
         
         try {
-            // Simular teste de integração
-            await new Promise(resolve => setTimeout(resolve, 2000));
-            
-            const ytDlpPath = this.getValue('ytDlpPath');
-            const ffmpegPath = this.getValue('ffmpegPath');
-            
-            let ytDlpStatus = '❌ Não configurado';
-            let ffmpegStatus = '❌ Não configurado';
-            
-            if (ytDlpPath) {
-                ytDlpStatus = '✅ Configurado';
-            }
-            
-            if (ffmpegPath) {
-                ffmpegStatus = '✅ Configurado';
-            }
-            
-            statusElement.innerHTML = `
-                <div><strong>Status da Integração:</strong></div>
-                <div>• yt-dlp: ${ytDlpStatus}</div>
-                <div>• FFmpeg: ${ffmpegStatus}</div>
-                ${!ytDlpPath ? '<div class="form-hint">Configure o caminho do yt-dlp para habilitar downloads</div>' : ''}
-            `;
-            
-            statusElement.className = ytDlpPath ? 'status success' : 'status warning';
+            const response = await chrome.runtime.sendMessage({ type: 'CHECK_TOOLS' });
+            const tools = response?.tools || {};
+            const ytDlpOk = !!tools.yt_dlp?.installed;
+            const ffmpegOk = !!tools.ffmpeg?.installed;
+            const ffprobeOk = !!tools.ffprobe?.installed;
+
+            statusElement.textContent = [
+                `yt-dlp: ${ytDlpOk ? 'instalado' : 'não encontrado'}`,
+                `FFmpeg: ${ffmpegOk ? 'instalado' : 'não encontrado'}`,
+                `FFprobe: ${ffprobeOk ? 'instalado' : 'não encontrado'}`
+            ].join(' | ');
+            statusElement.className = ytDlpOk && ffmpegOk && ffprobeOk ? 'status success' : 'status warning';
             
         } catch (error) {
-            statusElement.innerHTML = `<div>❌ Erro ao testar integração: ${error.message}</div>`;
+            statusElement.textContent = `Erro ao testar integração: ${error.message}`;
             statusElement.className = 'status error';
         }
     }
@@ -291,29 +277,26 @@ class SettingsManager {
         const ytDlpVersion = document.getElementById('ytDlpVersion');
         const ffmpegVersion = document.getElementById('ffmpegVersion');
         
-        ytDlpVersion.textContent = '🔍 Verificando...';
-        ffmpegVersion.textContent = '🔍 Verificando...';
+        ytDlpVersion.textContent = 'Verificando...';
+        ffmpegVersion.textContent = 'Verificando...';
         
         try {
-            // Simular verificação de versão
-            await new Promise(resolve => setTimeout(resolve, 1000));
+            const response = await chrome.runtime.sendMessage({ type: 'CHECK_TOOLS' });
+            const tools = response?.tools || {};
             
-            const ytDlpPath = this.getValue('ytDlpPath');
-            const ffmpegPath = this.getValue('ffmpegPath');
-            
-            if (ytDlpPath) {
-                ytDlpVersion.textContent = '2023.11.16 ✅';
+            if (tools.yt_dlp?.installed) {
+                ytDlpVersion.textContent = 'Instalado';
                 ytDlpVersion.style.color = '#10b981';
             } else {
-                ytDlpVersion.textContent = 'Não instalado ❌';
+                ytDlpVersion.textContent = 'Não encontrado';
                 ytDlpVersion.style.color = '#ef4444';
             }
             
-            if (ffmpegPath) {
-                ffmpegVersion.textContent = '6.0 ✅';
+            if (tools.ffmpeg?.installed) {
+                ffmpegVersion.textContent = 'Instalado';
                 ffmpegVersion.style.color = '#10b981';
             } else {
-                ffmpegVersion.textContent = 'Não instalado ❌';
+                ffmpegVersion.textContent = 'Não encontrado';
                 ffmpegVersion.style.color = '#ef4444';
             }
             

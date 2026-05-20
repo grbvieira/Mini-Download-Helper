@@ -1,94 +1,509 @@
-// server.js - FINAL CORRIGIDO
 const express = require('express');
-const { exec } = require('child_process');
+const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const cors = require('cors');
 const WebSocket = require('ws');
 const { v4: uuidv4 } = require('uuid');
 
-const util = require('util');
-const execPromise = util.promisify(require('child_process').exec);
-
 const app = express();
 
-// === MAPA DE DOWNLOADS ATIVOS ===
+const PORT = 3000;
+const HOST = '127.0.0.1';
+const DOWNLOAD_DIR = path.join(__dirname, 'downloads');
+const THUMB_DIR = path.join(__dirname, 'thumbs');
 const activeDownloads = new Map();
 
-// === CONFIGURAÇÕES ===
-const PORT = 3000;
-const DOWNLOAD_DIR = path.join(__dirname, 'downloads');
+ensureDirs();
 
-if (!fs.existsSync(DOWNLOAD_DIR)) {
-  fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
+function isAllowedOrigin(origin) {
+  if (!origin) return true;
+  if (/^chrome-extension:\/\//i.test(origin)) return true;
+
+  try {
+    const parsed = new URL(origin);
+    return ['localhost', '127.0.0.1', '::1'].includes(parsed.hostname);
+  } catch {
+    return false;
+  }
 }
 
-app.use(cors({ origin: '*', methods: ['GET', 'POST'], allowedHeaders: ['Content-Type'] }));
+app.use(cors({
+  origin(origin, callback) {
+    callback(isAllowedOrigin(origin) ? null : new Error('Origem nao permitida'), true);
+  },
+  methods: ['GET', 'POST'],
+  allowedHeaders: ['Content-Type']
+}));
 app.use(express.json({ limit: '10mb' }));
 
-// === ROTA DE TESTE ===
+function parseSelectedFormats(quality) {
+  const selected = String(quality || 'best').trim();
+
+  if (!selected) {
+    return {
+      selected,
+      videoFormat: 'best',
+      audioFormat: null,
+      forceSeparateAudio: false
+    };
+  }
+
+  if (selected.includes('+')) {
+    const [videoPart, audioPart] = selected.split('+');
+    return {
+      selected,
+      videoFormat: (videoPart || 'bestvideo').trim(),
+      audioFormat: (audioPart || 'bestaudio').trim(),
+      forceSeparateAudio: true
+    };
+  }
+
+  return {
+    selected,
+    videoFormat: selected,
+    audioFormat: null,
+    forceSeparateAudio: false
+  };
+}
+
+function ensureDirs() {
+  if (!fs.existsSync(DOWNLOAD_DIR)) {
+    fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
+  }
+  if (!fs.existsSync(THUMB_DIR)) {
+    fs.mkdirSync(THUMB_DIR, { recursive: true });
+  }
+}
+
+function sanitizeTitle(input) {
+  const fallback = 'video';
+  const value = String(input || fallback)
+    .replace(/[<>:"/\\|?*]/g, '')
+    .replace(/[\x00-\x1F]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .substring(0, 100);
+
+  return value || fallback;
+}
+
+function sanitizeFileBase(input) {
+  return String(input || 'thumb')
+    .replace(/[<>:"/\\|?*]/g, '')
+    .replace(/[\x00-\x1F]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .substring(0, 80) || 'thumb';
+}
+
+function safeOriginFromReferer(referer) {
+  try {
+    return new URL(referer).origin;
+  } catch {
+    return 'https://example.com';
+  }
+}
+
+function sendWs(downloadId, payload) {
+  wss.clients.forEach(client => {
+    if (client.downloadId === downloadId && client.readyState === WebSocket.OPEN) {
+      client.send(JSON.stringify(payload));
+    }
+  });
+}
+
+function sendProgress(downloadId, percent, text, extra = {}) {
+  sendWs(downloadId, {
+    type: 'progress',
+    percent,
+    text,
+    size: text,
+    ...extra
+  });
+}
+
+function sendError(downloadId, msg) {
+  console.log(`Erro [${downloadId}]: ${msg}`);
+  sendWs(downloadId, { type: 'error', error: msg });
+
+  wss.clients.forEach(client => {
+    if (client.downloadId === downloadId && client.readyState === WebSocket.OPEN) {
+      setTimeout(() => client.close(), 500);
+    }
+  });
+
+  cleanupActiveDownload(downloadId, { kill: true, removeFiles: false });
+}
+
+function finalizeDownload(downloadId, finalPath) {
+  try {
+    const stats = fs.statSync(finalPath);
+    console.log(`Sucesso [${downloadId}]: ${(stats.size / 1024 / 1024).toFixed(2)} MB`);
+
+    sendWs(downloadId, {
+      type: 'success',
+      fileUrl: `http://localhost:${PORT}/files/${encodeURIComponent(path.basename(finalPath))}`,
+      filename: path.basename(finalPath),
+      sizeBytes: stats.size
+    });
+
+    wss.clients.forEach(client => {
+      if (client.downloadId === downloadId && client.readyState === WebSocket.OPEN) {
+        setTimeout(() => client.close(), 1000);
+      }
+    });
+
+    cleanupActiveDownload(downloadId, { kill: false, removeFiles: false });
+  } catch (e) {
+    sendError(downloadId, 'Erro ao finalizar arquivo: ' + e.message);
+  }
+}
+
+function parseFfmpegTimeToSeconds(timeStr) {
+  if (!timeStr) return 0;
+  const match = timeStr.match(/(\d+):(\d+):(\d+(?:\.\d+)?)/);
+  if (!match) return 0;
+  const [, hh, mm, ss] = match;
+  return (Number(hh) * 3600) + (Number(mm) * 60) + Number(ss);
+}
+
+async function getDurationSeconds(inputPathOrUrl, headers = []) {
+  try {
+    const args = [
+      '-v', 'error',
+      '-show_entries', 'format=duration',
+      '-of', 'default=noprint_wrappers=1:nokey=1'
+    ];
+
+    for (const h of headers) {
+      args.push('-headers', h);
+    }
+
+    args.push(inputPathOrUrl);
+
+    const ffprobe = spawn('ffprobe', args, { windowsHide: true });
+
+    let stdout = '';
+    let stderr = '';
+
+    return await new Promise((resolve) => {
+      ffprobe.stdout.on('data', chunk => { stdout += chunk.toString(); });
+      ffprobe.stderr.on('data', chunk => { stderr += chunk.toString(); });
+
+      ffprobe.on('close', () => {
+        const duration = parseFloat((stdout || '').trim());
+        if (Number.isFinite(duration) && duration > 0) {
+          resolve(duration);
+        } else {
+          if (stderr.trim()) {
+            console.log('[ffprobe duration warn]', stderr.trim());
+          }
+          resolve(null);
+        }
+      });
+
+      ffprobe.on('error', () => resolve(null));
+    });
+  } catch {
+    return null;
+  }
+}
+
+function buildHeaderArgs(referer = 'https://example.com', extraHeaders = {}) {
+  const origin = safeOriginFromReferer(referer);
+  const merged = {
+    Referer: referer,
+    Origin: origin,
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    ...extraHeaders
+  };
+
+  const headerBlock = Object.entries(merged)
+    .filter(([, v]) => v !== undefined && v !== null && v !== '')
+    .map(([k, v]) => `${k}: ${v}\r\n`)
+    .join('');
+
+  return headerBlock ? ['-headers', headerBlock] : [];
+}
+
+function findBestDownloadedFile(prefixBase) {
+  const files = fs.readdirSync(DOWNLOAD_DIR);
+  const matches = files
+    .filter(f => f.startsWith(prefixBase))
+    .map(name => {
+      const full = path.join(DOWNLOAD_DIR, name);
+      const stat = fs.statSync(full);
+      return { name, full, size: stat.size };
+    })
+    .sort((a, b) => b.size - a.size);
+
+  return matches[0] || null;
+}
+
+function deleteIfExists(filePath) {
+  try {
+    if (filePath && fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+  } catch { }
+}
+
+function registerDownload(downloadId, payload = {}) {
+  activeDownloads.set(downloadId, {
+    process: null,
+    extraProcess: null,
+    ffmpegMerge: null,
+    tempFiles: [],
+    finalPath: null,
+    cancelled: false,
+    ...payload
+  });
+}
+
+function updateDownload(downloadId, patch = {}) {
+  const active = activeDownloads.get(downloadId);
+  if (!active) return;
+  Object.assign(active, patch);
+}
+
+function rememberTempFile(downloadId, filePath) {
+  if (!filePath) return;
+  const active = activeDownloads.get(downloadId);
+  if (!active) return;
+  if (!active.tempFiles.includes(filePath)) {
+    active.tempFiles.push(filePath);
+  }
+}
+
+function cleanupActiveDownload(downloadId, { kill = false, removeFiles = false } = {}) {
+  const active = activeDownloads.get(downloadId);
+  if (!active) return;
+
+  if (kill) {
+    for (const proc of [active.process, active.extraProcess, active.ffmpegMerge]) {
+      if (proc && !proc.killed) {
+        try { proc.kill('SIGKILL'); } catch { }
+      }
+    }
+  }
+
+  if (removeFiles) {
+    for (const filePath of active.tempFiles || []) {
+      deleteIfExists(filePath);
+    }
+    if (active.finalPath) {
+      deleteIfExists(active.finalPath);
+    }
+  }
+
+  activeDownloads.delete(downloadId);
+}
+
+function wasCancelled(downloadId) {
+  return !!activeDownloads.get(downloadId)?.cancelled;
+}
+
+function parseYtDlpProgressLine(line) {
+  if (!line) return null;
+
+  const percentMatch = line.match(/\[download\]\s+(\d+(?:\.\d+)?)%/i);
+  if (!percentMatch) return null;
+
+  const sizeMatch = line.match(/of\s+~?([^\s]+(?:\s*[KMGT]i?B)?)/i);
+  const speedMatch = line.match(/at\s+([^\s]+(?:\s*\/s)?)/i);
+  const etaMatch = line.match(/ETA\s+([^\s]+)/i);
+
+  return {
+    percent: Math.round(parseFloat(percentMatch[1])),
+    size: sizeMatch?.[1] || '',
+    speed: speedMatch?.[1] || '',
+    eta: etaMatch?.[1] || ''
+  };
+}
+
+function formatProgressText(prefix, info) {
+  const bits = [prefix];
+  if (info.size) bits.push(info.size);
+  if (info.speed) bits.push(info.speed);
+  if (info.eta) bits.push(`ETA ${info.eta}`);
+  return bits.join(' • ');
+}
+
+function runCommand(command, args, { timeout = 30000, maxBuffer = 1024 * 1024 } = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { windowsHide: true });
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+
+    const timer = setTimeout(() => {
+      settled = true;
+      try { child.kill('SIGKILL'); } catch { }
+      reject(new Error(`${command} excedeu o tempo limite`));
+    }, timeout);
+
+    child.stdout.on('data', chunk => {
+      stdout += chunk.toString();
+      if (stdout.length > maxBuffer) {
+        settled = true;
+        clearTimeout(timer);
+        try { child.kill('SIGKILL'); } catch { }
+        reject(new Error(`${command} excedeu o limite de saida`));
+      }
+    });
+
+    child.stderr.on('data', chunk => {
+      stderr += chunk.toString();
+      if (stderr.length > maxBuffer) {
+        stderr = stderr.slice(-maxBuffer);
+      }
+    });
+
+    child.on('error', error => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    });
+
+    child.on('close', code => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+
+      if (code === 0) {
+        resolve({ stdout, stderr });
+      } else {
+        reject(new Error(stderr.trim() || `${command} finalizou com codigo ${code}`));
+      }
+    });
+  });
+}
+
 app.get('/ping', (req, res) => {
   res.json({ success: true, message: 'Servidor vivo!', timestamp: new Date().toISOString() });
 });
 
-// === ROTA: LISTAR FORMATOS ===
+app.get('/check-tools', async (req, res) => {
+  const check = async (cmd, args) => {
+    try {
+      await runCommand(cmd, args, { timeout: 10000, maxBuffer: 1024 * 128 });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  res.json({
+    success: true,
+    tools: {
+      yt_dlp: { installed: await check('yt-dlp', ['--version']) },
+      ffmpeg: { installed: await check('ffmpeg', ['-version']) },
+      ffprobe: { installed: await check('ffprobe', ['-version']) }
+    }
+  });
+});
+
+app.use('/files', express.static(DOWNLOAD_DIR));
+app.use('/thumbs', express.static(THUMB_DIR));
+
 app.post('/list-formats', async (req, res) => {
   const { url, referer = 'https://example.com' } = req.body;
   if (!url) return res.status(400).json({ success: false, error: 'URL obrigatória' });
 
-  const origin = new URL(referer).origin;
-  
-  const cmd = [
-    'yt-dlp',
+  const origin = safeOriginFromReferer(referer);
+
+  const args = [
     '--dump-single-json',
     '--no-warnings',
     '--quiet',
     '--flat-playlist',
     '--skip-download',
-    `--add-header "Referer:${referer}"`,
-    `--add-header "Origin:${origin}"`,
-    '--add-header "User-Agent:Mozilla/5.0"',
-    `"${url}"`
-  ].join(' ');
+    '--add-header', `Referer:${referer}`,
+    '--add-header', `Origin:${origin}`,
+    '--add-header', 'User-Agent:Mozilla/5.0',
+    url
+  ];
 
   try {
-    const { stdout } = await execPromise(cmd, { timeout: 90000, maxBuffer: 1024 * 1024 * 10 });
-    
+    const { stdout } = await runCommand('yt-dlp', args, {
+      timeout: 90000,
+      maxBuffer: 1024 * 1024 * 10
+    });
+
     const jsonStart = stdout.indexOf('{');
     if (jsonStart === -1) throw new Error('Nenhum JSON válido encontrado');
-    
+
     let jsonStr = stdout.substring(jsonStart);
     const lastBrace = jsonStr.lastIndexOf('}');
     if (lastBrace !== -1) jsonStr = jsonStr.substring(0, lastBrace + 1);
 
     const info = JSON.parse(jsonStr);
 
-    const formats = (info.formats || []).map(f => {
-      const height = f.height ?? null;
-      const width = f.width ?? null;
-      let name = f.format_note || (height ? `${height}p` : 'Direto / MP4');
-      let resolution = '—';
+    const formats = (info.formats || [])
+      .filter(f => f.format_id)
+      .map(f => {
+        const width = f.width ?? null;
+        const height = f.height ?? null;
+        const hasVideo = f.vcodec && f.vcodec !== 'none';
+        const hasAudio = f.acodec && f.acodec !== 'none';
+        const isProgressive = hasVideo && hasAudio;
+        const isVideoOnly = hasVideo && !hasAudio;
+        const isAudioOnly = !hasVideo && hasAudio;
 
-      if (height && width) resolution = `${width}x${height}`;
-      else if (height) resolution = `${height}p`;
-      else if (f.ext === 'mp4' && f.protocol === 'https' && f.vcodec !== 'none') {
-        name = 'MP4 Direto (Qualidade Original)';
-        resolution = 'Automática';
-      } else {
-        name = 'Áudio only / Especial';
-        resolution = 'Áudio';
-      }
+        let resolution = '—';
+        if (width && height) {
+          resolution = `${width}x${height}`;
+        } else if (height) {
+          resolution = `${height}p`;
+        } else if (isAudioOnly) {
+          resolution = 'Áudio';
+        } else {
+          resolution = 'Automática';
+        }
 
-      return {
-        id: f.format_id || 'unknown',
-        name: name,
-        resolution: resolution,
-        size: f.filesize ? `${(f.filesize / 1024 / 1024).toFixed(1)} MB` : '—'
-      };
-    });
+        let name = f.format_note || '';
+        if (!name) {
+          if (isProgressive) name = 'MP4 com áudio';
+          else if (isVideoOnly) name = 'Vídeo sem áudio';
+          else if (isAudioOnly) name = 'Áudio';
+          else name = 'Formato especial';
+        }
+
+        const sizeBytes = f.filesize ?? f.filesize_approx ?? null;
+        const size = sizeBytes ? `${(sizeBytes / 1024 / 1024).toFixed(1)} MB` : '—';
+
+        return {
+          id: isVideoOnly ? `${f.format_id}+bestaudio/best` : String(f.format_id),
+          originalId: String(f.format_id),
+          name,
+          resolution,
+          size,
+          ext: f.ext || 'mp4',
+          hasVideo,
+          hasAudio,
+          isVideoOnly,
+          isAudioOnly,
+          note: isVideoOnly ? 'Vai baixar vídeo e áudio separadamente e mesclar.' : ''
+        };
+      })
+      .filter(f => f.hasVideo || f.isAudioOnly);
 
     if (formats.length === 0 && info.url) {
-      formats.push({ id: 'direct', name: 'Vídeo Direto (fallback)', resolution: 'Automática', size: '—' });
+      formats.push({
+        id: 'best',
+        originalId: 'best',
+        name: 'Vídeo Direto (fallback)',
+        resolution: 'Automática',
+        size: '—',
+        ext: 'mp4',
+        hasVideo: true,
+        hasAudio: true,
+        isVideoOnly: false,
+        isAudioOnly: false,
+        note: ''
+      });
     }
 
     res.json({ success: true, formats });
@@ -98,225 +513,309 @@ app.post('/list-formats', async (req, res) => {
   }
 });
 
-// === ROTA: DOWNLOAD ===
+// ---------- ROTA /download OTIMIZADA ----------
 app.post('/download', async (req, res) => {
   const { url, quality = 'best', title, referer = 'https://example.com' } = req.body;
   if (!url) return res.status(400).json({ success: false, error: 'URL obrigatória' });
 
+  ensureDirs();
   const downloadId = uuidv4();
+  const safeTitle = sanitizeTitle(title || 'video');
+  const origin = safeOriginFromReferer(referer);
   
-  // Limpeza do nome
-  let safeTitle = (title || 'video')
-  .replace(/[<>:"/\\|?*]/g, '')   // Remove caracteres proibidos no Windows/Linux
-  .replace(/[\x00-\x1F]/g, '')    // Remove caracteres de controle invisíveis
-  .trim()                         // Remove espaços sobrando no início e fim
-  .substring(0, 100);             // Limita o tamanho para não dar err
-  
-  const videoTemp = path.join(DOWNLOAD_DIR, `${safeTitle}_video.%(ext)s`);
-  const audioTemp = path.join(DOWNLOAD_DIR, `${safeTitle}_audio.%(ext)s`);
   const finalPath = path.join(DOWNLOAD_DIR, `${safeTitle}.mp4`);
-  const origin = new URL(referer).origin;
+  const templatePath = path.join(DOWNLOAD_DIR, `${safeTitle}.%(ext)s`);
 
-  const videoFormat = quality.includes('+') ? quality.split('+')[0] : 'bestvideo/best';
-  const audioFormat = quality.includes('+') ? quality.split('+')[1] : 'bestaudio';
+  // Se pedir "best" ou vier vazio, forçamos o yt-dlp a buscar a melhor junção de áudio e vídeo
+  let formatArg = quality;
+  if (!quality || quality === 'best' || quality === 'default') {
+    formatArg = 'bestvideo+bestaudio/best';
+  } else if (!quality.includes('+')) {
+    // Se vier um ID específico do popup, força a juntar com o melhor áudio disponível
+    formatArg = `${quality}+bestaudio/best`;
+  }
 
-  console.log(`\nIniciando download [ID: ${downloadId}] - ${safeTitle}`);
-  
-  // Resposta imediata
+  console.log(`\nIniciando download [ID: ${downloadId}] - ${safeTitle} | Formato: ${formatArg}`);
+
+  registerDownload(downloadId, { mode: 'ytdlp', finalPath });
   res.json({ success: true, downloadId });
 
-  let hasAudio = false;
-
-  // === FUNÇÕES AUXILIARES (DEFINIDAS UMA VEZ SÓ) ===
-  const sendProgress = (percent, status) => {
-    wss.clients.forEach(client => {
-      if (client.downloadId === downloadId && client.readyState === WebSocket.OPEN) {
-        client.send(JSON.stringify({ type: 'progress', percent, size: status }));
-      }
-    });
-  };
-
-  const sendError = (msg) => {
-    console.log(`Erro [${downloadId}]: ${msg}`);
-    wss.clients.forEach(client => {
-      if (client.downloadId === downloadId && client.readyState === WebSocket.OPEN) {
-        client.send(JSON.stringify({ type: 'error', error: msg }));
-        client.close();
-      }
-    });
-    activeDownloads.delete(downloadId);
-  };
-
-  const finalizeDownload = () => {
-    try {
-      const stats = fs.statSync(finalPath);
-      console.log(`Sucesso [${downloadId}]: ${(stats.size / 1024 / 1024).toFixed(2)} MB`);
-      
-      wss.clients.forEach(client => {
-        if (client.downloadId === downloadId && client.readyState === WebSocket.OPEN) {
-          client.send(JSON.stringify({
-            type: 'success',
-            fileUrl: `http://localhost:${PORT}/files/${encodeURIComponent(path.basename(finalPath))}`,
-            filename: path.basename(finalPath)
-          }));
-          // Não fecha o WS imediatamente para dar tempo do front receber
-          setTimeout(() => client.close(), 1000);
-        }
-      });
-      activeDownloads.delete(downloadId);
-    } catch (e) {
-      sendError('Erro ao finalizar arquivo: ' + e.message);
-    }
-  };
-
-// === INÍCIO DO PROCESSO (MODIFICADO PARA DEBUG) ===
-  const videoCmd = [
-    'yt-dlp',
-    `--format "${videoFormat}"`,
-    `--output "${videoTemp}"`,
-    '--newline',
-    '--no-part', // Importante para streams que podem falhar no meio
+  const ytdlpArgs = [
+    '--no-update',
+    '--format', formatArg,
+    '--merge-output-format', 'mp4',
+    
+    // Força a conversão do áudio para AAC alta qualidade durante o merge
+    '--postprocessor-args', 'ffmpeg:-c:v copy -c:a aac -b:a 192k',
+    
+    '--output', templatePath,
+    '--newline', 
     '--progress',
-    // Adiciona headers para enganar o site
-    `--add-header "Referer:${referer}"`,
-    `--add-header "Origin:${origin}"`,
-    '--add-header "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"',
-    `"${url}"`
-  ].join(' ');
+    '--add-header', `Referer:${referer}`,
+    '--add-header', `Origin:${origin}`,
+    url
+  ];
 
-  console.log('Executando comando:', videoCmd); // Mostra o comando exato para você testar se quiser
+  // O spawn envia os dados continuamente, destravando a barra de progresso
+  const ytProcess = spawn('yt-dlp', ytdlpArgs, { windowsHide: true });
+  updateDownload(downloadId, { process: ytProcess });
 
-  const videoChild = exec(videoCmd, { maxBuffer: 1024 * 1024 * 50, timeout: 0 });
-  
-  // Variável para capturar o erro
   let errorLog = '';
 
-  activeDownloads.set(downloadId, { video: videoChild, audio: null });
-
-  // Captura o progresso (STDOUT)
-  videoChild.stdout.on('data', (chunk) => {
-    const lines = chunk.toString().split('\n');
+  ytProcess.stdout.on('data', (chunk) => {
+    const text = chunk.toString();
+    const lines = text.split(/[\r\n]+/);
+    
     lines.forEach(line => {
-      const match = line.match(/\[download\]\s+(\d+\.\d+)%\s+of\s+~?([\d.]+)(\w+)/i);
-      if (match) {
-        const percent = Math.round(parseFloat(match[1]) * (hasAudio ? 0.7 : 1.0));
-        sendProgress(percent, `Vídeo: ${match[2] + match[3]}`);
+      // Limpa os caracteres ANSI invisíveis
+      const cleanLine = line.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '');
+      const percentMatch = cleanLine.match(/\[download\]\s+(\d+(?:\.\d+)?)%/i);
+      
+      if (percentMatch && !wasCancelled(downloadId)) {
+        const percent = Math.round(parseFloat(percentMatch[1]));
+        const sizeMatch = cleanLine.match(/of\s+~?\s*([^\s]+(?:\s*[KMGT]i?B)?)/i);
+        const speedMatch = cleanLine.match(/at\s+([^\s]+(?:\s*\/s)?)/i);
+        const etaMatch = cleanLine.match(/ETA\s+([^\s]+)/i);
+
+        const bits = ['Processando'];
+        if (sizeMatch) bits.push(sizeMatch[1]);
+        if (speedMatch) bits.push(speedMatch[1]);
+        if (etaMatch) bits.push(`ETA ${etaMatch[1]}`);
+        
+        sendProgress(downloadId, percent, bits.join(' • '));
+      } else if (cleanLine.includes('[Merger]') || cleanLine.includes('[ffmpeg]')) {
+         sendProgress(downloadId, 99, 'Mesclando áudio e vídeo...');
       }
     });
   });
 
-  // Captura o ERRO (STDERR) - AQUI ESTÁ A CORREÇÃO
-  videoChild.stderr.on('data', (data) => {
-    errorLog += data;
-    // Opcional: Imprime erros em tempo real no console
-    console.error(`[yt-dlp LOG]: ${data}`); 
-  });
+  ytProcess.stderr.on('data', (data) => errorLog += data.toString());
 
-  videoChild.on('close', async (code) => {
-    // Se der erro, mostra o log completo do yt-dlp
-    if (code !== 0) {
-        console.error('\n--- DETALHES DO ERRO ---');
-        console.error(errorLog);
-        console.error('------------------------\n');
-        return sendError(`Erro no yt-dlp: ${errorLog.slice(-100)}`); // Envia os últimos 100 caracteres do erro para o popup
-    }
+  ytProcess.on('close', (code) => {
+    if (wasCancelled(downloadId)) return;
+    if (code !== 0) return sendError(downloadId, `Erro no yt-dlp: ${errorLog.slice(-400)}`);
 
-    // ... (o resto do código continua igual: procura o arquivo, checa áudio, etc)
-    const files = fs.readdirSync(DOWNLOAD_DIR);
-    const videoFile = files.find(f => f.startsWith(`${safeTitle}_video`));
-    
-    if (!videoFile) return sendError('Arquivo de vídeo não encontrado mesmo após sucesso aparente.');
-
-    // ... Restante da lógica de áudio e FFmpeg ...
-
-    // Checa se tem áudio
-    try {
-      const { stdout } = await execPromise(`ffprobe -v quiet -select_streams a -show_entries stream=codec_name -of csv=p=0 "${path.join(DOWNLOAD_DIR, videoFile)}"`);
-      hasAudio = stdout.trim().length > 0;
-    } catch (e) { hasAudio = false; }
-
-    if (hasAudio) {
-      try { 
-        fs.renameSync(path.join(DOWNLOAD_DIR, videoFile), finalPath); 
-        finalizeDownload();
-      } catch (e) { sendError('Erro ao renomear arquivo final'); }
+    if (fs.existsSync(finalPath)) {
+      finalizeDownload(downloadId, finalPath);
     } else {
-      // Baixar áudio separado
-      console.log('Baixando áudio separado...');
-      const audioCmd = [
-        'yt-dlp',
-        `--format "${audioFormat}"`,
-        `--output "${audioTemp}"`,
-        '--newline',
-        `--add-header "Referer:${referer}"`,
-        `"${url}"`
-      ].join(' ');
-
-      const audioChild = exec(audioCmd);
-      if (activeDownloads.get(downloadId)) {
-        activeDownloads.get(downloadId).audio = audioChild;
-      }
-
-      audioChild.on('close', (aCode) => {
-        const audioFiles = fs.readdirSync(DOWNLOAD_DIR);
-        const audioFile = audioFiles.find(f => f.startsWith(`${safeTitle}_audio`));
-
-        if (aCode !== 0 || !audioFile) {
-            // Falhou áudio, entrega vídeo mudo
-            console.log('Falha no áudio, entregando sem som');
-            try { fs.renameSync(path.join(DOWNLOAD_DIR, videoFile), finalPath); } catch {}
-            finalizeDownload();
-            return;
+      // Fallback caso o yt-dlp salve com uma extensão ligeiramente diferente
+      const found = findBestDownloadedFile(safeTitle);
+      if (found) {
+        try {
+          fs.renameSync(found.full, finalPath);
+          finalizeDownload(downloadId, finalPath);
+        } catch (e) {
+          sendError(downloadId, 'Erro ao mover arquivo final: ' + e.message);
         }
-
-        // Mesclar
-        const ffmpegCmd = `ffmpeg -i "${path.join(DOWNLOAD_DIR, videoFile)}" -i "${path.join(DOWNLOAD_DIR, audioFile)}" -c:v copy -c:a aac -b:a 192k -y "${finalPath}"`;
-        exec(ffmpegCmd, (err) => {
-            // Limpa temporários
-            try { fs.unlinkSync(path.join(DOWNLOAD_DIR, videoFile)); } catch {}
-            try { fs.unlinkSync(path.join(DOWNLOAD_DIR, audioFile)); } catch {}
-            
-            if (err) return sendError('Erro ao mesclar com FFmpeg');
-            finalizeDownload();
-        });
-      });
+      } else {
+        sendError(downloadId, 'Arquivo final não encontrado.');
+      }
     }
   });
 });
+// ---------------------------------------------------
 
-// === WEBSOCKET ===
+app.post('/download-stream', async (req, res) => {
+  const {
+    url,
+    title,
+    referer = 'https://example.com',
+    type = 'hls',
+    headers = {}
+  } = req.body;
+
+  if (!url) {
+    return res.status(400).json({ success: false, error: 'URL obrigatória' });
+  }
+
+  ensureDirs();
+
+  const downloadId = uuidv4();
+  const safeTitle = sanitizeTitle(title || 'stream');
+  const finalPath = path.join(DOWNLOAD_DIR, `${safeTitle}.mp4`);
+
+  registerDownload(downloadId, { mode: type || 'stream', finalPath, tempFiles: [finalPath] });
+  res.json({ success: true, downloadId });
+
+  const headerArgs = buildHeaderArgs(referer, headers);
+  const duration = await getDurationSeconds(url, headerArgs.length ? [headerArgs[1]] : []);
+
+  const ffmpegArgs = [
+    ...headerArgs,
+    '-y',
+    '-i', url,
+    '-c', 'copy',
+    '-bsf:a', 'aac_adtstoasc',
+    finalPath
+  ];
+
+  const ffmpeg = spawn('ffmpeg', ffmpegArgs, {
+    windowsHide: true
+  });
+
+  updateDownload(downloadId, { process: ffmpeg });
+
+  let stderrLog = '';
+  let lastSent = 0;
+
+  ffmpeg.stderr.on('data', (chunk) => {
+    const text = chunk.toString();
+    stderrLog += text;
+
+    const timeMatch = text.match(/time=(\d+:\d+:\d+(?:\.\d+)?)/);
+    if (!timeMatch || wasCancelled(downloadId)) return;
+
+    const currentSec = parseFfmpegTimeToSeconds(timeMatch[1]);
+    let percent = 0;
+
+    if (duration && duration > 0) {
+      percent = Math.max(1, Math.min(99, Math.round((currentSec / duration) * 100)));
+    } else {
+      // 🔥 fallback para HLS sem duração
+      percent = Math.min(99, Math.max(1, Math.floor(currentSec / 2)));
+    }
+    if (percent === 0 || percent >= lastSent + 1) {
+      lastSent = percent;
+      sendProgress(downloadId, percent, `Baixando stream (${timeMatch[1]})`);
+    }
+  });
+
+  ffmpeg.on('error', (err) => {
+    if (wasCancelled(downloadId)) return;
+    sendError(downloadId, `Falha ao iniciar FFmpeg: ${err.message}`);
+  });
+
+  ffmpeg.on('close', (code) => {
+    if (wasCancelled(downloadId)) return;
+
+    if (code !== 0) {
+      return sendError(downloadId, `FFmpeg falhou: ${stderrLog.slice(-400)}`);
+    }
+
+    if (!fs.existsSync(finalPath)) {
+      return sendError(downloadId, 'FFmpeg finalizou, mas o arquivo não foi encontrado.');
+    }
+
+    sendProgress(downloadId, 100, 'Concluído');
+    finalizeDownload(downloadId, finalPath);
+  });
+});
+
+app.post('/thumbnail', async (req, res) => {
+  const {
+    url,
+    title,
+    referer = 'https://example.com',
+    headers = {}
+  } = req.body;
+
+  if (!url) {
+    return res.status(400).json({ success: false, error: 'URL obrigatória' });
+  }
+
+  ensureDirs();
+
+  const thumbId = uuidv4();
+  const baseName = sanitizeFileBase(title || 'thumb') + '_' + thumbId;
+  const outputPath = path.join(THUMB_DIR, `${baseName}.jpg`);
+
+  deleteIfExists(outputPath);
+
+  const headerArgs = buildHeaderArgs(referer, headers);
+
+  const ffmpegArgs = [
+    ...headerArgs,
+    '-y',
+    '-ss', '00:00:01.000',
+    '-i', url,
+    '-frames:v', '1',
+    '-q:v', '2',
+    '-vf', 'scale=480:-1',
+    outputPath
+  ];
+
+  const ffmpeg = spawn('ffmpeg', ffmpegArgs, {
+    windowsHide: true
+  });
+
+  let stderrLog = '';
+
+  ffmpeg.stderr.on('data', (chunk) => {
+    stderrLog += chunk.toString();
+  });
+
+  ffmpeg.on('error', (err) => {
+    return res.status(500).json({
+      success: false,
+      error: 'Falha ao iniciar FFmpeg',
+      details: err.message
+    });
+  });
+
+  ffmpeg.on('close', (code) => {
+    if (code !== 0) {
+      return res.status(500).json({
+        success: false,
+        error: 'FFmpeg falhou ao gerar thumbnail',
+        details: stderrLog.slice(-500)
+      });
+    }
+
+    if (!fs.existsSync(outputPath)) {
+      return res.status(500).json({
+        success: false,
+        error: 'Thumbnail não foi gerada'
+      });
+    }
+
+    return res.json({
+      success: true,
+      thumbUrl: `http://localhost:${PORT}/thumbs/${encodeURIComponent(path.basename(outputPath))}`,
+      filename: path.basename(outputPath)
+    });
+  });
+});
+
+app.post('/cancel-download', (req, res) => {
+  const { downloadId } = req.body;
+  if (!downloadId) {
+    return res.status(400).json({ success: false, error: 'downloadId obrigatório' });
+  }
+
+  const active = activeDownloads.get(downloadId);
+  if (!active) {
+    return res.json({ success: false, error: 'Download não encontrado' });
+  }
+
+  try {
+    active.cancelled = true;
+    cleanupActiveDownload(downloadId, { kill: true, removeFiles: true });
+    sendWs(downloadId, { type: 'error', error: 'Download cancelado' });
+    return res.json({ success: true });
+  } catch (error) {
+    return res.json({ success: false, error: error.message });
+  }
+});
+
 const wss = new WebSocket.Server({ noServer: true });
+
 wss.on('connection', (ws, req) => {
   const downloadId = new URL(req.url, `http://localhost:${PORT}`).searchParams.get('id');
   if (downloadId) {
     ws.downloadId = downloadId;
-    console.log(`[WS] Cliente conectado: ${downloadId}`);
   }
 });
 
-// === SERVIR ARQUIVOS E FERRAMENTAS ===
-app.use('/files', express.static(DOWNLOAD_DIR));
-
-app.get('/check-tools', async (req, res) => {
-  // Simplificado para checar se roda
-  const check = async (cmd) => {
-    try { await execPromise(cmd); return true; } catch { return false; }
-  };
-  res.json({
-    success: true,
-    tools: {
-      yt_dlp: { installed: await check('yt-dlp --version') },
-      ffmpeg: { installed: await check('ffmpeg -version') }
-    }
-  });
-});
-
-// === INICIAR ===
-const server = app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Servidor rodando em http://localhost:${PORT}`);
+const server = app.listen(PORT, HOST, () => {
+  console.log(`Servidor rodando em http://${HOST}:${PORT}`);
 });
 
 server.on('upgrade', (request, socket, head) => {
+  if (!isAllowedOrigin(request.headers.origin)) {
+    socket.destroy();
+    return;
+  }
+
   wss.handleUpgrade(request, socket, head, (ws) => {
     wss.emit('connection', ws, request);
   });

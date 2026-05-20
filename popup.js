@@ -1,317 +1,950 @@
-// popup.js - COM LIMPEZA DE LISTA (GERAL E INDIVIDUAL)
-class VideoDownloaderPro {
-  constructor() {
-    this.currentVideos = [];
-    this.selectedVideo = null;
-    this.selectedQuality = null;
-    this.initializeElements();
+const SERVER_BASE = "http://localhost:3000";
+
+const groupsEl = document.getElementById("groups");
+const logsEl = document.getElementById("logs");
+const subtitleEl = document.getElementById("subtitle");
+const groupTemplate = document.getElementById("groupTemplate");
+const itemTemplate = document.getElementById("itemTemplate");
+
+const wsMap = new Map();
+let currentData = null;
+const userSelections = new Map();
+
+// --- VARIÁVEL PARA GUARDAR A URL DA ABA ATUAL ---
+let currentActiveTabUrl = "";
+
+document.getElementById("clearAllBtn").addEventListener("click", async () => {
+  await chrome.runtime.sendMessage({ type: "CLEAR_ALL" });
+  await refresh();
+});
+
+document.getElementById("clearDownloadedBtn").addEventListener("click", async () => {
+  await chrome.runtime.sendMessage({ type: "CLEAR_DOWNLOADED" });
+  await refresh();
+});
+
+// Atualiza ao receber mensagem, aplicando o filtro de aba
+chrome.runtime.onMessage.addListener((message) => {
+  if (message?.type === "STORE_UPDATED" && message.data) {
+    const filteredData = filterDataForTab(message.data, currentActiveTabUrl);
+    render(filteredData);
   }
+});
 
-  async initializeElements() {
-    this.elements = {
-      detectBtn: document.getElementById('detectBtn'),
-      // Vamos criar o botão de limpar dinamicamente ou usar um existente se houver
-      videosList: document.getElementById('videosList'),
-      emptyContent: document.getElementById('emptyContent'),
-      videoDetail: document.getElementById('videoDetail'),
-      previewThumb: document.getElementById('previewThumb'),
-      previewTitle: document.getElementById('previewTitle'),
-      qualityGrid: document.getElementById('qualityGrid'),
-      formatSelect: document.getElementById('formatSelect'),
-      downloadBtn: document.getElementById('downloadBtn'),
-      downloadStatus: document.getElementById('downloadStatus'),
-      progressBar: document.getElementById('progressBar'),
-      progressFill: document.getElementById('progressFill'),
-      videoCount: document.getElementById('videoCount') // Adicionei referência ao contador
-    };
-    
-    // Adiciona botão de limpar tudo no cabeçalho da sidebar
-    this.injectClearButton();
+// Ao inicializar o popup, puxa qual aba o usuário está olhando
+chrome.tabs.query({ active: true, currentWindow: true }).then(tabs => {
+  currentActiveTabUrl = tabs[0]?.url || "";
+  refresh().catch(console.error);
+});
 
-    this.setupEventListeners();
-    await this.checkRequiredTools();
-  }
+async function refresh() {
+  const response = await chrome.runtime.sendMessage({ type: "GET_MAIN_DATA" });
 
-  // NOVA FUNÇÃO: Cria o botão de limpar tudo ao lado do contador
-  injectClearButton() {
-    const sidebarHeader = document.querySelector('.sidebar-header');
-    if (sidebarHeader && !document.getElementById('clearAllBtn')) {
-      const clearBtn = document.createElement('i');
-      clearBtn.id = 'clearAllBtn';
-      clearBtn.className = 'fas fa-trash-alt';
-      clearBtn.title = 'Limpar lista';
-      clearBtn.style.cursor = 'pointer';
-      clearBtn.style.marginLeft = '10px';
-      clearBtn.style.color = '#ef4444'; // Vermelho
-      clearBtn.style.fontSize = '12px';
-      
-      clearBtn.onclick = (e) => {
-        e.stopPropagation();
-        this.clearAllVideos();
-      };
-
-      sidebarHeader.appendChild(clearBtn);
-    }
-  }
-
-  setupEventListeners() {
-    this.elements.detectBtn.addEventListener('click', () => this.detectVideos());
-    this.elements.downloadBtn.addEventListener('click', () => this.startDownload());
-  }
-
-  async checkRequiredTools() {
-    try {
-      const response = await fetch('http://localhost:3000/check-tools');
-      const data = await response.json();
-      if (!data.tools.yt_dlp.installed || !data.tools.ffmpeg.installed) {
-        this.showError('Instale as ferramentas (yt-dlp/ffmpeg).');
-        this.elements.downloadBtn.disabled = true;
-      }
-    } catch (error) {
-      this.showError('Servidor offline. Rode: node server.js');
-      this.elements.downloadBtn.disabled = true;
-    }
-  }
-
-  async detectVideos() {
-    this.showLoading('Procurando vídeos...');
-    try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      const response = await chrome.tabs.sendMessage(tab.id, { action: 'detectVideos' });
-
-      if (response && response.videos.length > 0) {
-        // Mescla novos vídeos com os atuais (sem duplicar)
-        this.handleDetectedVideos(response.videos);
-        this.showStatus(`${response.videos.length} novos vídeos!`, 'success');
-      } else {
-        this.showError('Nenhum vídeo novo encontrado.');
-      }
-    } catch (error) {
-      this.showError('Dê F5 na página e tente novamente.');
-    }
-  }
-
-  // NOVA FUNÇÃO: Limpa tudo
-  clearAllVideos() {
-    this.currentVideos = [];
-    this.elements.videosList.innerHTML = '';
-    this.elements.emptyContent.style.display = 'block';
-    this.elements.videoDetail.classList.remove('active');
-    this.updateCount(0);
-    this.showStatus('Lista limpa.', 'info');
-  }
-
-  // NOVA FUNÇÃO: Remove um vídeo específico
-  removeVideo(videoToRemove, cardElement) {
-    // Remove do array
-    this.currentVideos = this.currentVideos.filter(v => v !== videoToRemove);
-    
-    // Remove do HTML
-    cardElement.remove();
-    this.updateCount(this.currentVideos.length);
-
-    // Se o vídeo removido era o selecionado, limpa o detalhe
-    if (this.selectedVideo === videoToRemove) {
-        this.elements.videoDetail.classList.remove('active');
-        this.selectedVideo = null;
-    }
-
-    // Se não sobrou nada, mostra estado vazio
-    if (this.currentVideos.length === 0) {
-        this.elements.emptyContent.style.display = 'block';
-    }
-  }
-
-  updateCount(count) {
-    if (this.elements.videoCount) {
-        this.elements.videoCount.textContent = count;
-    }
-  }
-
-  handleDetectedVideos(newVideos) {
-    // Lógica para manter os vídeos antigos e adicionar novos (sem duplicar)
-    // Se quiser que o botão "Detectar" limpe a lista antes, descomente a linha abaixo:
-    // this.currentVideos = []; this.elements.videosList.innerHTML = '';
-
-    const seenUrls = new Set(this.currentVideos.map(v => v.url.split('?')[0]));
-
-    newVideos.forEach(video => {
-      const cleanUrl = video.url.split('?')[0];
-      
-      if (!seenUrls.has(cleanUrl)) {
-        seenUrls.add(cleanUrl);
-        this.currentVideos.push(video);
-        this.renderVideoCard(video);
-      }
+  if (!response?.ok) {
+    render({
+      hits: [],
+      logs: [{ type: "error", message: response?.error || "Falha ao carregar" }],
+      progress: {}
     });
-    
-    if (this.currentVideos.length > 0) {
-        this.elements.emptyContent.style.display = 'none';
-        this.updateCount(this.currentVideos.length);
-    }
+    return;
   }
 
-  renderVideoCard(video) {
-      const card = document.createElement('div');
-      card.className = 'video-card';
-      // CSS inline para o card suportar o botão X absoluto
-      card.style.position = 'relative'; 
-      
-      let thumbSrc = video.thumbnail;
-      if (!thumbSrc || thumbSrc.includes('placeholder')) thumbSrc = 'icons/icon128.png';
+  // Aplica o filtro antes de jogar na tela
+  const filteredData = filterDataForTab(response.data, currentActiveTabUrl);
+  render(filteredData);
+}
 
-      card.innerHTML = `
-        <div class="video-thumb">
-            <img src="${thumbSrc}" onerror="this.src='icons/icon128.png'">
-        </div>
-        <div class="video-info">
-            <h3>${this.escapeHtml(video.title)}</h3>
-        </div>
-        <div class="remove-btn" style="position: absolute; top: 5px; right: 5px; color: #ef4444; cursor: pointer; display: none;">
-            <i class="fas fa-times-circle"></i>
-        </div>
-      `;
-      
-      // Eventos para mostrar/esconder o X
-      card.addEventListener('mouseenter', () => {
-          card.querySelector('.remove-btn').style.display = 'block';
-      });
-      card.addEventListener('mouseleave', () => {
-          card.querySelector('.remove-btn').style.display = 'none';
-      });
-
-      // Evento de remover
-      card.querySelector('.remove-btn').addEventListener('click', (e) => {
-          e.stopPropagation(); // Não seleciona o vídeo ao clicar no X
-          this.removeVideo(video, card);
-      });
-      
-      // Evento de selecionar
-      card.addEventListener('click', () => {
-        document.querySelectorAll('.video-card').forEach(c => c.classList.remove('active'));
-        card.classList.add('active');
-        this.selectVideo(video);
-      });
-      
-      this.elements.videosList.appendChild(card);
-  }
-
-  selectVideo(video) {
-    this.selectedVideo = video;
-    this.elements.videoDetail.classList.add('active');
-    
-    this.elements.previewTitle.textContent = video.title;
-    
-    let thumbSrc = video.thumbnail;
-    if (!thumbSrc || thumbSrc.includes('placeholder')) thumbSrc = 'icons/icon128.png';
-    this.elements.previewThumb.src = thumbSrc;
-    this.elements.previewThumb.onerror = () => { this.elements.previewThumb.src = 'icons/icon128.png'; };
-
-    this.loadRealQualities(video);
-  }
-
-  async loadRealQualities(video) {
-    this.elements.qualityGrid.innerHTML = '<div class="loading-container"><div class="spinner"></div> Analisando...</div>';
-    try {
-      const response = await fetch('http://localhost:3000/list-formats', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: video.url, referer: video.pageUrl })
-      });
-      
-      const result = await response.json();
-      if (!result.success) throw new Error(result.error);
-      this.renderQualityOptions(result.formats);
-    } catch (e) {
-      this.renderQualityOptions([{ id: 'best', name: 'Qualidade Automática', resolution: 'Padrão', size: '?' }]);
-    }
-  }
-
-  renderQualityOptions(qualities) {
-    this.elements.qualityGrid.innerHTML = '';
-    qualities.forEach((q, i) => {
-      const card = document.createElement('div');
-      card.className = 'quality-card' + (i === 0 ? ' selected' : '');
-      card.innerHTML = `
-        <div class="quality-name">${q.name}</div>
-        <div class="quality-res">${q.resolution}</div>
-        <div class="quality-size">${q.size}</div>
-      `;
-      if(i === 0) this.selectedQuality = q;
-      card.addEventListener('click', () => {
-        document.querySelectorAll('.quality-card').forEach(c => c.classList.remove('selected'));
-        card.classList.add('selected');
-        this.selectedQuality = q;
-        this.elements.downloadBtn.disabled = false;
-      });
-      this.elements.qualityGrid.appendChild(card);
-    });
-    this.elements.downloadBtn.disabled = false;
-  }
-
-  startDownload() {
-    if (!this.selectedVideo || !this.selectedQuality) return;
-
-    this.elements.progressBar.style.display = 'block';
-    this.elements.progressFill.style.width = '0%';
-    this.showStatus('Solicitando...', 'info');
-
-    fetch('http://localhost:3000/download', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        url: this.selectedVideo.url,
-        quality: this.selectedQuality.id,
-        format: this.elements.formatSelect.value,
-        title: this.selectedVideo.title,
-        referer: this.selectedVideo.pageUrl
-      })
-    })
-    .then(res => res.json())
-    .then(data => {
-      if (!data.success) throw new Error(data.error);
-      const ws = new WebSocket(`ws://localhost:3000/progress?id=${data.downloadId}`);
-      ws.onmessage = (event) => {
-        const msg = JSON.parse(event.data);
-        if (msg.type === 'progress') {
-          this.elements.progressFill.style.width = `${msg.percent}%`;
-          this.showStatus(`${msg.percent}% - ${msg.size}`, 'info');
-        } else if (msg.type === 'success') {
-          this.showStatus('Concluído!', 'success');
-          this.elements.progressFill.style.width = '100%';
-          chrome.downloads.download({ url: msg.fileUrl, filename: msg.filename });
-          ws.close();
-          // Opcional: Remover o vídeo da lista automaticamente após sucesso?
-          // this.removeVideo(this.selectedVideo, document.querySelector('.video-card.active'));
-        } else if (msg.type === 'error') {
-          this.showStatus(`Erro: ${msg.error}`, 'error');
-          ws.close();
-        }
-      };
-      ws.onerror = () => this.showStatus('Erro WebSocket', 'error');
-    })
-    .catch(err => {
-      this.showStatus(`Erro: ${err.message}`, 'error');
-    });
-  }
-
-  showStatus(msg, type) {
-    const el = this.elements.downloadStatus;
-    el.textContent = msg;
-    el.style.color = type === 'error' ? '#ef4444' : (type === 'success' ? '#10b981' : '#f1f5f9');
-  }
-
-  showLoading(msg) { this.showStatus(msg, 'info'); }
-  showError(msg) { this.showStatus(msg, 'error'); }
+// --- FUNÇÃO QUE FILTRA MÍDIAS DE OUTRAS ABAS ---
+function filterDataForTab(data, activeTabUrl) {
+  if (!data || !data.hits) return data;
+  const activeBase = getBaseUrl(activeTabUrl);
+  const filteredHits = [];
   
-  setupMessageListener() { /* Mantido */ }
-  escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
+  for (const group of data.hits) {
+    const filteredGroup = group.filter(hit => {
+      const isCurrentPage = activeBase && getBaseUrl(hit.page_url) === activeBase;
+      // Mostra apenas se for da página atual OU se o usuário clicou para baixar/fixar
+      return isCurrentPage || hit.status === 'running' || hit.status === 'pinned' || hit.status === 'downloaded';
+    });
+    if (filteredGroup.length > 0) {
+      filteredHits.push(filteredGroup);
+    }
+  }
+  return { ...data, hits: filteredHits };
+}
+
+function getBaseUrl(u) {
+  try {
+    const parsed = new URL(u);
+    return parsed.origin + parsed.pathname;
+  } catch {
+    return String(u || '');
+  }
+}
+// --------------------------------------------------
+
+function render(data) {
+  currentData = structuredCloneSafe(data);
+
+  const rawGroups = currentData?.hits || [];
+  const logs = currentData?.logs || [];
+  const progress = currentData?.progress || {};
+
+  const visibleGroups = buildDisplayGroups(rawGroups, progress);
+
+  const totalItems = visibleGroups.reduce((sum, group) => sum + group.length, 0);
+  subtitleEl.textContent = `${totalItems} mídia(s) detectada(s) nesta aba`;
+
+  groupsEl.innerHTML = "";
+
+  if (!visibleGroups.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "Nenhuma mídia detectada nesta aba ainda.";
+    groupsEl.appendChild(empty);
+  } else {
+    for (const group of visibleGroups) {
+      const first = group[0];
+      const groupNode = groupTemplate.content.firstElementChild.cloneNode(true);
+
+      groupNode.querySelector(".group-title").textContent = first?.title || "Grupo";
+      groupNode.querySelector(".group-meta").textContent = buildGroupMeta(group);
+
+      const pageLink = groupNode.querySelector(".page-link");
+      pageLink.href = first?.page_url || "#";
+      pageLink.textContent = shortHost(first?.page_url || "");
+
+      const itemsWrap = groupNode.querySelector(".group-items");
+      for (const hit of group) {
+        itemsWrap.appendChild(renderItem(hit, pickDisplayProgress(hit, progress)));
+      }
+
+      groupsEl.appendChild(groupNode);
+    }
+  }
+
+  logsEl.textContent = logs
+    .map(log => `[${new Date(log.at || Date.now()).toLocaleTimeString()}] ${String(log.type).toUpperCase()}: ${log.message}`)
+    .join("\n");
+
+  bindWebSockets(currentData);
+}
+
+function buildDisplayGroups(rawGroups) {
+  const flattened = [];
+
+  for (const group of rawGroups || []) {
+    for (const hit of group || []) {
+      if (isUsefulHitForDisplay(hit)) {
+        flattened.push(structuredCloneSafe(hit));
+      }
+    }
+  }
+
+  if (!flattened.length) return [];
+
+  const families = new Map();
+
+  for (const hit of flattened) {
+    const familyKey = buildDisplayFamilyKey(hit);
+    const existing = families.get(familyKey);
+
+    if (!existing) {
+      families.set(familyKey, createDisplayHit(hit));
+      continue;
+    }
+
+    mergeDisplayHits(existing, hit);
+  }
+
+  const displayHits = [...families.values()]
+    .map(finalizeDisplayHit)
+    .sort((a, b) => {
+      return bestVariantScore(b) - bestVariantScore(a) || (b.lastSeenAt || 0) - (a.lastSeenAt || 0);
+    });
+
+  return displayHits.map(hit => [hit]);
+}
+
+function createDisplayHit(hit) {
+  const displayHit = structuredCloneSafe(hit);
+  displayHit.displaySourceHitIds = [hit.id];
+  displayHit.primaryHitId = hit.id;
+  displayHit.variants = cloneVariantsWithSource(hit.variants || {}, hit.id, hit.type);
+  displayHit.type = chooseDisplayType([hit]);
+  displayHit.status = chooseDisplayStatus([hit]);
+  displayHit.pinned = !!hit.pinned;
+  return displayHit;
+}
+
+function finalizeDisplayHit(hit) {
+  const finalized = structuredCloneSafe(hit);
+  finalized.variants = dedupeVariants(finalized.variants || {}, finalized);
+
+  if (!Object.keys(finalized.variants).length) {
+    const fallbackVariant = makeFallbackVariant(finalized);
+    finalized.variants = { [fallbackVariant.id]: fallbackVariant };
+  }
+
+  const sources = collectDisplaySourceHits(finalized);
+  finalized.primaryHitId = choosePrimaryHitId(finalized, sources);
+  finalized.type = chooseDisplayType(sources);
+  finalized.status = chooseDisplayStatus(sources);
+  finalized.filename = finalized.filename || suggestDisplayFilename(finalized);
+
+  return finalized;
+}
+
+function cloneVariantsWithSource(variants, sourceHitId, sourceType) {
+  const out = {};
+
+  for (const [variantId, variant] of Object.entries(variants || {})) {
+    out[variantId] = {
+      ...structuredCloneSafe(variant),
+      sourceHitId,
+      sourceType
+    };
+  }
+
+  return out;
+}
+
+function isUsefulHitForDisplay(hit) {
+  if (!hit || !hit.url) return false;
+
+  const url = String(hit.url).toLowerCase();
+  if (/\.(m4s|ts|m4f|cmfa|cmfv)(?:$|\?)/i.test(url)) return false;
+
+  return ["hls", "dash", "file"].includes(String(hit.type || "").toLowerCase());
+}
+
+function buildDisplayFamilyKey(hit) {
+  const host = safeHost(hit.page_url || hit.url);
+  const pagePath = normalizePagePath(hit.page_url || hit.url);
+  const title = normalizeLoose(hit.title);
+  const thumbKey = normalizeLoose(filenameStem(filenameFromUrl(hit.thumbnail || "")));
+  const fileKey = normalizeLoose(filenameStem(hit.filename || filenameFromUrl(hit.url)));
+
+  return [host, pagePath, title || fileKey || thumbKey].filter(Boolean).join("::");
+}
+
+function mergeDisplayHits(target, source) {
+  target.title = preferLonger(target.title, source.title);
+  target.thumbnail = chooseBetterThumbnail(target.thumbnail, source.thumbnail);
+  target.page_url = target.page_url || source.page_url;
+  target.filename = chooseBetterFilename(target.filename, source.filename);
+  target.lastSeenAt = Math.max(target.lastSeenAt || 0, source.lastSeenAt || 0);
+  target.displaySourceHitIds = uniqueArray([...(target.displaySourceHitIds || []), source.id]);
+  target.pinned = !!target.pinned || !!source.pinned;
+
+  if (!target.variants) target.variants = {};
+
+  for (const [variantId, variant] of Object.entries(cloneVariantsWithSource(source.variants || {}, source.id, source.type))) {
+    const existingEntry = Object.entries(target.variants).find(([, v]) => variantSignature(v) === variantSignature(variant));
+
+    if (!existingEntry) {
+      target.variants[variantId] = variant;
+      continue;
+    }
+
+    const [existingId, existingVariant] = existingEntry;
+    if (shouldPreferVariant(variant, existingVariant)) {
+      target.variants[existingId] = { ...existingVariant, ...variant, id: existingId };
+    }
+  }
+
+  const allSources = uniqueHitsById([
+    ...collectDisplaySourceHits(target),
+    source
+  ]);
+
+  target.type = chooseDisplayType(allSources);
+  target.status = chooseDisplayStatus(allSources);
+  target.primaryHitId = choosePrimaryHitId(target, allSources);
+}
+
+function collectDisplaySourceHits(displayHit) {
+  const hits = [];
+  for (const sourceId of displayHit.displaySourceHitIds || []) {
+    const raw = findRawHitById(sourceId);
+    if (raw) hits.push(raw);
+  }
+  return uniqueHitsById(hits);
+}
+
+function uniqueHitsById(hits) {
+  const seen = new Set();
+  const out = [];
+  for (const hit of hits) {
+    if (!hit?.id || seen.has(hit.id)) continue;
+    seen.add(hit.id);
+    out.push(hit);
+  }
+  return out;
+}
+
+function chooseDisplayType(hits) {
+  const types = new Set((hits || []).map(hit => String(hit?.type || "").toLowerCase()));
+  if (types.has("hls")) return "hls";
+  if (types.has("dash")) return "dash";
+  if (types.has("file")) return "file";
+  return hits?.[0]?.type || "file";
+}
+
+function chooseDisplayStatus(hits) {
+  const statuses = new Set((hits || []).map(hit => String(hit?.status || "active").toLowerCase()));
+  if (statuses.has("running")) return "running";
+  if (statuses.has("pinned")) return "pinned";
+  if (statuses.has("downloaded")) return "downloaded";
+  return "active";
+}
+
+function choosePrimaryHitId(displayHit, hits) {
+  const sorted = [...(hits || [])].sort((a, b) => {
+    const aType = sourceTypePriority(a?.type);
+    const bType = sourceTypePriority(b?.type);
+    return bType - aType || bestVariantScore(b) - bestVariantScore(a) || (b.lastSeenAt || 0) - (a.lastSeenAt || 0);
+  });
+
+  return sorted[0]?.id || displayHit.primaryHitId || displayHit.id;
+}
+
+function sourceTypePriority(type) {
+  switch (String(type || "").toLowerCase()) {
+    case "hls": return 30;
+    case "dash": return 20;
+    case "file": return 10;
+    default: return 0;
   }
 }
 
-document.addEventListener('DOMContentLoaded', () => {
-  new VideoDownloaderPro();
-});
+function chooseBetterThumbnail(a, b) {
+  if (a && !isPlaceholderThumb(a)) return a;
+  return b || a;
+}
+
+function chooseBetterFilename(a, b) {
+  const ax = String(a || "").toLowerCase();
+  const bx = String(b || "").toLowerCase();
+  if (!a) return b;
+  if (!b) return a;
+  if (ax.endsWith(".mp4") && !bx.endsWith(".mp4")) return a;
+  if (bx.endsWith(".mp4") && !ax.endsWith(".mp4")) return b;
+  return preferLonger(a, b);
+}
+
+function isPlaceholderThumb(url) {
+  return String(url || "").startsWith("data:image/svg+xml");
+}
+
+function variantSignature(variant) {
+  return [
+    normalizeVariantLabel(variant.label || ""),
+    variant.height || 0,
+    variant.width || 0,
+    variant.audio_only ? "audio" : "video"
+  ].join("::");
+}
+
+function shouldPreferVariant(next, current) {
+  if (!current) return true;
+
+  const nextScore = sourceVariantPriority(next);
+  const currentScore = sourceVariantPriority(current);
+
+  if (nextScore !== currentScore) return nextScore > currentScore;
+  return scoreVariant(next) > scoreVariant(current);
+}
+
+function sourceVariantPriority(variant) {
+  let score = 0;
+
+  const isConcreteHlsVariant =
+    variant?.sourceType === "hls" &&
+    variant?.media_url &&
+    /\.m3u8(?:$|\?)/i.test(variant.media_url);
+
+  // Prioridade máxima para playlists-filhas reais do HLS
+  if (isConcreteHlsVariant) score += 5000;
+
+  // DASH/file com seletor real do yt-dlp continua forte
+  if (variant.ytdlp_format_id) score += 2000;
+
+  if (variant.sourceType === "hls") score += 300;
+  else if (variant.sourceType === "dash") score += 200;
+  else if (variant.sourceType === "file") score += 100;
+  else if (variant.sourceType === "hls_fallback") score += 10;
+
+  if (!variant.audio_only) score += 50;
+  return score;
+}
+
+function dedupeVariants(variantsObj, hit) {
+  const variants = Object.values(variantsObj || {});
+  const bestByKey = new Map();
+
+  for (const variant of variants) {
+    if (variant.audio_only) continue;
+
+    const label = normalizeVariantLabel(variant.label || "");
+    const key = [
+      label || "auto",
+      variant.height || 0,
+      variant.width || 0
+    ].join("::");
+
+    const existing = bestByKey.get(key);
+    if (!existing || shouldPreferVariant(variant, existing)) {
+      bestByKey.set(key, variant);
+    }
+  }
+
+  const out = {};
+  const finalVariants = [...bestByKey.values()].sort((a, b) => scoreVariant(b) - scoreVariant(a));
+
+  for (const variant of finalVariants) {
+    out[variant.id] = variant;
+  }
+
+  if (!Object.keys(out).length && hit?.url) {
+    const fallback = makeFallbackVariant(hit);
+    out[fallback.id] = fallback;
+  }
+
+  return out;
+}
+
+function makeFallbackVariant(hit) {
+  return {
+    id: "default",
+    label: hit?.type === "hls" ? "Auto HLS" : hit?.type === "dash" ? "Auto DASH" : "Arquivo",
+    media_url: hit?.url || "",
+    ext: "mp4",
+    mime: hit?.mime || "",
+    audio_only: false,
+    width: null,
+    height: null,
+    bandwidth: null,
+    sourceHitId: hit?.primaryHitId || hit?.id,
+    sourceType: hit?.type || "file",
+    ytdlp_format_id: null
+  };
+}
+
+function pickDisplayProgress(hit, progressMap) {
+  const sourceIds = hit.displaySourceHitIds || [hit.id];
+  let best = null;
+
+  for (const sourceId of sourceIds) {
+    const progress = progressMap?.[sourceId];
+    if (!progress) continue;
+
+    if (!best) {
+      best = progress;
+      continue;
+    }
+
+    const bestPercent = Number(best.percent || 0);
+    const nextPercent = Number(progress.percent || 0);
+    if (nextPercent > bestPercent) {
+      best = progress;
+    }
+  }
+
+  return best;
+}
+
+function renderItem(hit, progress) {
+  const node = itemTemplate.content.firstElementChild.cloneNode(true);
+
+  const thumb = node.querySelector(".thumb");
+  thumb.src = hit.thumbnail || createPlaceholderThumb(hit.type);
+  thumb.alt = hit.title || "thumbnail";
+  thumb.onerror = () => {
+    thumb.src = createPlaceholderThumb(hit.type);
+  };
+
+  node.querySelector(".item-title").textContent = hit.title || "Mídia";
+
+  const statusEl = node.querySelector(".status");
+  const pretty = prettyStatus(hit.status || "active");
+  statusEl.textContent = pretty;
+  statusEl.setAttribute("data-status", pretty);
+
+  node.querySelector(".item-type").textContent = prettyType(hit.type);
+  node.querySelector(".item-file").textContent = hit.filename || "sem nome";
+
+  const select = node.querySelector(".variant-select");
+  const variants = getSortedVariants(hit);
+  const duplicateCounts = buildVariantLabelCounts(variants);
+
+  select.innerHTML = "";
+
+  if (!variants.length) {
+    const fallback = document.createElement("option");
+    fallback.value = "default";
+    fallback.textContent = "Auto";
+    select.appendChild(fallback);
+  } else {
+    for (const variant of variants) {
+      const option = document.createElement("option");
+      option.value = variant.id;
+      option.textContent = describeVariantWithContext(variant, duplicateCounts);
+      select.appendChild(option);
+    }
+  }
+
+  if (userSelections.has(hit.id)) {
+    const savedVal = userSelections.get(hit.id);
+    if (Array.from(select.options).some(opt => opt.value === savedVal)) {
+      select.value = savedVal;
+    }
+  }
+
+  select.addEventListener("change", () => {
+    userSelections.set(hit.id, select.value);
+  });
+
+  const progressRow = node.querySelector(".progress-row");
+  const progressBar = node.querySelector(".progress-bar-inner");
+  const progressText = node.querySelector(".progress-text");
+
+  if (progress) {
+    progressRow.classList.remove("hidden");
+    progressBar.style.width = `${Math.max(0, Math.min(100, progress.percent || 0))}%`;
+    progressText.textContent = progress.text || "";
+  } else {
+    progressRow.classList.add("hidden");
+  }
+
+  const downloadBtn = node.querySelector(".download-btn");
+  const downloadAsBtn = node.querySelector(".download-as-btn");
+  const copyBtn = node.querySelector(".copy-btn");
+  const pinBtn = node.querySelector(".pin-btn");
+  const forgetBtn = node.querySelector(".forget-btn");
+
+  downloadBtn.addEventListener("click", async () => {
+    userSelections.set(hit.id, select.value);
+    await runDisplayAction("download", hit, select.value);
+  });
+
+  downloadAsBtn.addEventListener("click", async () => {
+    userSelections.set(hit.id, select.value);
+    await runDisplayAction("download_as", hit, select.value);
+  });
+
+  copyBtn.addEventListener("click", async () => {
+    const result = await runDisplayAction("copy", hit, select.value, false);
+    if (result?.copyText) {
+      await navigator.clipboard.writeText(result.copyText);
+    }
+  });
+
+  pinBtn.textContent = hit.pinned ? "Desfixar" : "Fixar";
+  pinBtn.addEventListener("click", async () => {
+    await runDisplayAction("pin", hit, select.value);
+  });
+
+  forgetBtn.addEventListener("click", async () => {
+    await runDisplayAction("forget", hit, select.value);
+  });
+
+  if (hit.status === "running") {
+    downloadBtn.disabled = true;
+    downloadAsBtn.disabled = true;
+  }
+
+  return node;
+}
+
+function buildVariantLabelCounts(variants) {
+  const counts = new Map();
+  for (const variant of variants) {
+    const label = describeVariant(variant);
+    counts.set(label, (counts.get(label) || 0) + 1);
+  }
+  return counts;
+}
+
+function describeVariantWithContext(variant, duplicateCounts) {
+  const base = describeVariant(variant);
+  if ((duplicateCounts.get(base) || 0) <= 1) return base;
+
+  if (variant.sourceType === "hls") return `${base} • HLS`;
+  if (variant.sourceType === "dash") return `${base} • DASH`;
+  if (variant.sourceType === "file") return `${base} • MP4`;
+  return base;
+}
+
+async function runDisplayAction(action, displayHit, variantId, doRefresh = true) {
+  const variant = pickDisplayVariant(displayHit, variantId);
+  let lastResult = { ok: true };
+
+  if (action === "download" || action === "download_as" || action === "copy") {
+    lastResult = await chrome.runtime.sendMessage({
+      type: "ACTION_COMMAND",
+      action,
+      hitId: displayHit.primaryHitId || displayHit.id,
+      variantId: variant?.id,
+      sourceHitId: variant?.sourceHitId || displayHit.primaryHitId || displayHit.id,
+      sourceVariantId: variant?.id
+    });
+  } else if (action === "pin" || action === "forget") {
+    const sourceIds = (displayHit.displaySourceHitIds || [displayHit.primaryHitId || displayHit.id]).filter(Boolean);
+
+    for (const sourceId of sourceIds) {
+      lastResult = await chrome.runtime.sendMessage({
+        type: "ACTION_COMMAND",
+        action,
+        hitId: sourceId
+      });
+
+      if (!lastResult?.ok) break;
+    }
+  } else {
+    lastResult = await chrome.runtime.sendMessage({
+      type: "ACTION_COMMAND",
+      action,
+      hitId: displayHit.primaryHitId || displayHit.id,
+      variantId: variant?.id,
+      sourceHitId: variant?.sourceHitId || displayHit.primaryHitId || displayHit.id,
+      sourceVariantId: variant?.id
+    });
+  }
+
+  if (!lastResult?.ok && lastResult?.error) {
+    console.error(lastResult.error);
+  }
+
+  if (doRefresh) {
+    await refresh();
+  }
+
+  return lastResult;
+}
+
+function resolveActionSourceHitIds(action, displayHit, variant) {
+  if (action === "download" || action === "download_as" || action === "copy") {
+    return [variant?.sourceHitId || displayHit.primaryHitId || displayHit.id].filter(Boolean);
+  }
+
+  if (action === "pin" || action === "forget") {
+    return (displayHit.displaySourceHitIds || [displayHit.primaryHitId || displayHit.id]).filter(Boolean);
+  }
+
+  return [displayHit.primaryHitId || displayHit.id].filter(Boolean);
+}
+
+function pickDisplayVariant(hit, requestedId) {
+  const variants = getSortedVariants(hit);
+  if (!variants.length) return makeFallbackVariant(hit);
+  return variants.find(v => v.id === requestedId) || variants[0];
+}
+
+function bindWebSockets(data) {
+  const activeServerIds = new Map();
+
+  for (const group of data?.hits || []) {
+    for (const hit of group) {
+      const serverId = data?.progress?.[hit.id]?.serverDownloadId || hit.serverDownloadId;
+      if (serverId && hit.status === "running") {
+        activeServerIds.set(serverId, hit.id);
+        ensureWebSocket(serverId, hit.id);
+      }
+    }
+  }
+
+  for (const [serverId, ws] of wsMap.entries()) {
+    if (!activeServerIds.has(serverId)) {
+      try {
+        ws.close();
+      } catch { }
+      wsMap.delete(serverId);
+    }
+  }
+}
+
+function ensureWebSocket(serverDownloadId, hitId) {
+  if (wsMap.has(serverDownloadId)) return;
+
+  const ws = new WebSocket(`ws://localhost:3000/?id=${encodeURIComponent(serverDownloadId)}`);
+
+  ws.onmessage = async (event) => {
+    try {
+      const msg = JSON.parse(event.data);
+
+      if (msg.type === "progress") {
+        await patchProgress(hitId, {
+          percent: typeof msg.percent === "number" ? msg.percent : 0,
+          text: msg.size || "Baixando...",
+          serverDownloadId
+        });
+      }
+
+      if (msg.type === "success") {
+        await patchProgress(hitId, {
+          percent: 100,
+          text: `Concluído: ${msg.filename || "arquivo"}`
+        });
+        await patchStatus(hitId, "downloaded");
+      }
+
+      if (msg.type === "error") {
+        await patchProgress(hitId, {
+          percent: 0,
+          text: `Erro: ${msg.error || "falha"}`
+        });
+        await patchStatus(hitId, "active");
+      }
+    } catch (e) {
+      console.error("WS parse error:", e);
+    }
+  };
+
+  ws.onclose = () => {
+    wsMap.delete(serverDownloadId);
+  };
+
+  ws.onerror = () => {
+    wsMap.delete(serverDownloadId);
+  };
+
+  wsMap.set(serverDownloadId, ws);
+}
+
+async function patchProgress(hitId, patch) {
+  if (!currentData) return;
+
+  if (!currentData.progress) currentData.progress = {};
+  currentData.progress[hitId] = {
+    ...(currentData.progress[hitId] || {}),
+    ...patch
+  };
+
+  await chrome.runtime.sendMessage({
+    type: "PATCH_PROGRESS",
+    hitId,
+    patch
+  }).catch(() => { });
+
+  render(currentData);
+}
+
+async function patchStatus(hitId, status) {
+  if (!currentData) return;
+
+  for (const group of currentData.hits || []) {
+    for (const hit of group) {
+      if (hit.id === hitId) {
+        hit.status = status;
+      }
+    }
+  }
+
+  await chrome.runtime.sendMessage({
+    type: "PATCH_STATUS",
+    hitId,
+    status
+  }).catch(() => { });
+
+  render(currentData);
+}
+
+function getSortedVariants(hit) {
+  return Object.values(hit.variants || {}).sort((a, b) => scoreVariant(b) - scoreVariant(a));
+}
+
+function describeVariant(variant) {
+  if (!variant) return "Auto";
+
+  if (variant.label === "Qualidade Máxima (Original)") return variant.label;
+
+  if (variant.audio_only) {
+    if (variant.bandwidth) {
+      return `Áudio • ${Math.round(variant.bandwidth / 1000)} kbps`;
+    }
+    return "Áudio";
+  }
+
+  if (variant.height) {
+    return `${variant.height}p`;
+  }
+
+  if (variant.width && variant.height) {
+    return `${variant.height}p`;
+  }
+
+  if (variant.bandwidth) {
+    return `${Math.round(variant.bandwidth / 1000)} kbps`;
+  }
+
+  if (variant.label) {
+    return normalizeVariantLabel(variant.label);
+  }
+
+  return "Auto";
+}
+
+function normalizeVariantLabel(label) {
+  const raw = String(label || "").trim();
+
+  const resMatch = raw.match(/(\d{3,4})x(\d{3,4})/i);
+  if (resMatch) {
+    return `${resMatch[2]}p`;
+  }
+
+  const pMatch = raw.match(/(\d{3,4})p/i);
+  if (pMatch) {
+    return `${pMatch[1]}p`;
+  }
+
+  return raw || "Auto";
+}
+
+function scoreVariant(v) {
+  const resolutionScore = (v.width || 0) * (v.height || 0);
+  const bandwidthScore = v.bandwidth || 0;
+  const audioPenalty = v.audio_only ? -999999999 : 0;
+  const sourceBonus = sourceVariantPriority(v);
+  return resolutionScore + bandwidthScore + audioPenalty + sourceBonus;
+}
+
+function buildGroupMeta(group) {
+  const hit = group[0];
+  const variants = getSortedVariants(hit);
+  const labels = variants.map(v => describeVariant(v)).filter(Boolean);
+  const uniqueLabels = [...new Set(labels)];
+
+  if (!uniqueLabels.length) {
+    return `${group.length} item(ns)`;
+  }
+
+  return uniqueLabels.join(" • ");
+}
+
+function prettyType(type) {
+  switch ((type || "").toLowerCase()) {
+    case "hls":
+      return "HLS";
+    case "dash":
+      return "DASH";
+    case "file":
+      return "Arquivo";
+    default:
+      return String(type || "Arquivo").toUpperCase();
+  }
+}
+
+function prettyStatus(status) {
+  switch ((status || "").toLowerCase()) {
+    case "active":
+      return "Ativo";
+    case "running":
+      return "Baixando";
+    case "downloaded":
+      return "Concluído";
+    case "pinned":
+      return "Fixado";
+    case "inactive":
+      return "Inativo";
+    default:
+      return status || "Ativo";
+  }
+}
+
+function shortHost(url) {
+  try {
+    return new URL(url).host;
+  } catch {
+    return "página";
+  }
+}
+
+function safeHost(url) {
+  try {
+    return new URL(url).host;
+  } catch {
+    return "";
+  }
+}
+
+function normalizePagePath(url) {
+  try {
+    const u = new URL(url);
+    return u.pathname
+      .replace(/\/+$/, "")
+      .toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function normalizeLoose(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .replace(/[^\w\s-]/g, "")
+    .trim();
+}
+
+function preferLonger(a, b) {
+  return String(b || "").length > String(a || "").length ? b : a;
+}
+
+function structuredCloneSafe(obj) {
+  try {
+    return structuredClone(obj);
+  } catch {
+    return JSON.parse(JSON.stringify(obj));
+  }
+}
+
+function bestVariantScore(hit) {
+  return Math.max(0, ...Object.values(hit.variants || {}).map(scoreVariant), 0);
+}
+
+function createPlaceholderThumb(type) {
+  const text = encodeURIComponent((type || "media").toUpperCase());
+  return `data:image/svg+xml;charset=utf-8,` +
+    `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180" viewBox="0 0 320 180">` +
+    `<rect width="320" height="180" fill="#0d1117"/>` +
+    `<rect x="20" y="20" width="280" height="140" rx="12" fill="#161b22" stroke="#2b3445"/>` +
+    `<text x="160" y="98" font-family="Arial" font-size="24" fill="#8ea6c9" text-anchor="middle">${text}</text>` +
+    `</svg>`;
+}
+
+function filenameFromUrl(url) {
+  try {
+    const u = new URL(url);
+    const last = u.pathname.split("/").filter(Boolean).pop() || "";
+    return decodeURIComponent(last);
+  } catch {
+    return "";
+  }
+}
+
+function filenameStem(value) {
+  return String(value || "")
+    .replace(/^https?:\/\//i, "")
+    .replace(/[?#].*$/, "")
+    .replace(/\.[a-z0-9]{1,8}$/i, "")
+    .trim();
+}
+
+function suggestDisplayFilename(hit) {
+  const base = normalizeLoose(filenameStem(hit.title || hit.filename || filenameFromUrl(hit.url || ""))) || "video";
+  return `${base}.mp4`;
+}
+
+function findRawHitById(hitId) {
+  for (const group of currentData?.hits || []) {
+    for (const hit of group || []) {
+      if (hit.id === hitId) return hit;
+    }
+  }
+  return null;
+}
+
+function uniqueArray(arr) {
+  return [...new Set((arr || []).filter(Boolean))];
+}
