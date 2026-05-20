@@ -2,6 +2,8 @@
 
 Mini Download Helper e uma extensao Chrome Manifest V3 para detectar midias em paginas web, agrupar variantes de qualidade e baixar arquivos diretos, HLS e DASH com apoio de um servidor local Node.js.
 
+> Aviso: esta e uma versao educacional, criada apenas para estudo, pesquisa e aprendizado sobre extensoes de navegador, deteccao de midia e integracao local com ferramentas como `yt-dlp` e `ffmpeg`. Use somente com conteudos que voce tem direito de acessar e armazenar.
+
 O projeto combina a extensao do navegador com um servidor local em `127.0.0.1:3000`. A extensao detecta midias e apresenta a interface; o servidor executa tarefas pesadas com `yt-dlp`, `ffmpeg` e `ffprobe`.
 
 ## Recursos
@@ -127,10 +129,12 @@ npm audit --omit=dev
 
 ## Observacoes de seguranca
 
+- Este projeto e fornecido apenas para fins educacionais e de estudo.
 - O servidor local foi projetado para uso na propria maquina e fica preso a `127.0.0.1`.
 - O projeto usa permissao `<all_urls>` para detectar midias em paginas variadas.
-- Revise as permissoes antes de publicar a extensao em loja.
 - Baixe apenas conteudos que voce tem direito de acessar e armazenar.
+
+A documentacao em ingles esta disponivel em [README.en.md](README.en.md).
 
 ## Licenca
 

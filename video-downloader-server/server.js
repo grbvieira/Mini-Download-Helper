@@ -43,36 +43,6 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '10mb' }));
 
-function parseSelectedFormats(quality) {
-  const selected = String(quality || 'best').trim();
-
-  if (!selected) {
-    return {
-      selected,
-      videoFormat: 'best',
-      audioFormat: null,
-      forceSeparateAudio: false
-    };
-  }
-
-  if (selected.includes('+')) {
-    const [videoPart, audioPart] = selected.split('+');
-    return {
-      selected,
-      videoFormat: (videoPart || 'bestvideo').trim(),
-      audioFormat: (audioPart || 'bestaudio').trim(),
-      forceSeparateAudio: true
-    };
-  }
-
-  return {
-    selected,
-    videoFormat: selected,
-    audioFormat: null,
-    forceSeparateAudio: false
-  };
-}
-
 function ensureDirs() {
   if (!fs.existsSync(DOWNLOAD_DIR)) {
     fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
@@ -331,15 +301,6 @@ function updateDownload(downloadId, patch = {}) {
   Object.assign(active, patch);
 }
 
-function rememberTempFile(downloadId, filePath) {
-  if (!filePath) return;
-  const active = activeDownloads.get(downloadId);
-  if (!active) return;
-  if (!active.tempFiles.includes(filePath)) {
-    active.tempFiles.push(filePath);
-  }
-}
-
 function cleanupActiveDownload(downloadId, { kill = false, removeFiles = false } = {}) {
   const active = activeDownloads.get(downloadId);
   if (!active) return;
@@ -366,32 +327,6 @@ function cleanupActiveDownload(downloadId, { kill = false, removeFiles = false }
 
 function wasCancelled(downloadId) {
   return !!activeDownloads.get(downloadId)?.cancelled;
-}
-
-function parseYtDlpProgressLine(line) {
-  if (!line) return null;
-
-  const percentMatch = line.match(/\[download\]\s+(\d+(?:\.\d+)?)%/i);
-  if (!percentMatch) return null;
-
-  const sizeMatch = line.match(/of\s+~?([^\s]+(?:\s*[KMGT]i?B)?)/i);
-  const speedMatch = line.match(/at\s+([^\s]+(?:\s*\/s)?)/i);
-  const etaMatch = line.match(/ETA\s+([^\s]+)/i);
-
-  return {
-    percent: Math.round(parseFloat(percentMatch[1])),
-    size: sizeMatch?.[1] || '',
-    speed: speedMatch?.[1] || '',
-    eta: etaMatch?.[1] || ''
-  };
-}
-
-function formatProgressText(prefix, info) {
-  const bits = [prefix];
-  if (info.size) bits.push(info.size);
-  if (info.speed) bits.push(info.speed);
-  if (info.eta) bits.push(`ETA ${info.eta}`);
-  return bits.join(' • ');
 }
 
 function runCommand(command, args, { timeout = 30000, maxBuffer = 1024 * 1024 } = {}) {
@@ -590,7 +525,7 @@ app.post('/list-formats', async (req, res) => {
   }
 });
 
-// ---------- ROTA /download OTIMIZADA ----------
+
 app.post('/download', async (req, res) => {
   const { url, quality = 'best', title, referer = 'https://example.com' } = req.body;
   if (!url) return res.status(400).json({ success: false, error: 'URL obrigatória' });
@@ -602,13 +537,12 @@ app.post('/download', async (req, res) => {
   
   const finalPath = path.join(DOWNLOAD_DIR, `${safeTitle}.mp4`);
   const templatePath = path.join(DOWNLOAD_DIR, `${safeTitle}.%(ext)s`);
-
-  // Se pedir "best" ou vier vazio, forçamos o yt-dlp a buscar a melhor junção de áudio e vídeo
+  // Default to the best available video and audio combination.
   let formatArg = quality;
   if (!quality || quality === 'best' || quality === 'default') {
     formatArg = 'bestvideo+bestaudio/best';
   } else if (!quality.includes('+')) {
-    // Se vier um ID específico do popup, força a juntar com o melhor áudio disponível
+    // Pair specific video-only format IDs with the best available audio track.
     formatArg = `${quality}+bestaudio/best`;
   }
 
@@ -621,8 +555,7 @@ app.post('/download', async (req, res) => {
     '--no-update',
     '--format', formatArg,
     '--merge-output-format', 'mp4',
-    
-    // Força a conversão do áudio para AAC alta qualidade durante o merge
+    // Convert merged audio to AAC for broad MP4 compatibility.
     '--postprocessor-args', 'ffmpeg:-c:v copy -c:a aac -b:a 192k',
     
     '--output', templatePath,
@@ -633,7 +566,7 @@ app.post('/download', async (req, res) => {
     url
   ];
 
-  // O spawn envia os dados continuamente, destravando a barra de progresso
+  // spawn streams progress lines continuously for the popup progress bar.
   const ytProcess = spawn('yt-dlp', ytdlpArgs, { windowsHide: true });
   updateDownload(downloadId, { process: ytProcess });
 
@@ -644,7 +577,7 @@ app.post('/download', async (req, res) => {
     const lines = text.split(/[\r\n]+/);
     
     lines.forEach(line => {
-      // Limpa os caracteres ANSI invisíveis
+      // Remove ANSI control characters before parsing yt-dlp output.
       const cleanLine = line.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '');
       const percentMatch = cleanLine.match(/\[download\]\s+(\d+(?:\.\d+)?)%/i);
       
@@ -675,7 +608,7 @@ app.post('/download', async (req, res) => {
     if (fs.existsSync(finalPath)) {
       finalizeDownload(downloadId, finalPath);
     } else {
-      // Fallback caso o yt-dlp salve com uma extensão ligeiramente diferente
+      // Fallback when yt-dlp saves the merged file with a different extension.
       const found = findBestDownloadedFile(safeTitle);
       if (found) {
         try {
@@ -690,7 +623,7 @@ app.post('/download', async (req, res) => {
     }
   });
 });
-// ---------------------------------------------------
+
 
 app.post('/download-stream', async (req, res) => {
   const {
@@ -748,7 +681,7 @@ app.post('/download-stream', async (req, res) => {
     if (duration && duration > 0) {
       percent = Math.max(1, Math.min(99, Math.round((currentSec / duration) * 100)));
     } else {
-      // 🔥 fallback para HLS sem duração
+      // Fallback for HLS streams where duration probing is unavailable.
       percent = Math.min(99, Math.max(1, Math.floor(currentSec / 2)));
     }
     if (percent === 0 || percent >= lastSent + 1) {

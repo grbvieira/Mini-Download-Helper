@@ -1,43 +1,39 @@
-// options.js - Gerenciador de Configurações do Video Downloader Pro
+// Settings page controller for Video Downloader Pro.
 class SettingsManager {
     constructor() {
         this.settings = {};
         this.defaultSettings = this.getDefaultSettings();
         this.currentTab = 'general';
-        
+
         this.initialize();
     }
 
     async initialize() {
-        console.log('⚙️ Settings Manager Iniciado');
-        
         await this.loadSettings();
         this.setupEventListeners();
         this.setupTabNavigation();
         this.populateForm();
         this.checkIntegrationStatus();
         this.loadStatistics();
-        
-        console.log('✅ Configurações carregadas:', this.settings);
+
     }
 
     setupEventListeners() {
-        // Navegação
+        // Navigation
         document.getElementById('backBtn').addEventListener('click', () => this.goBack());
         document.getElementById('saveBtn').addEventListener('click', () => this.saveSettings());
         
-        // Abas
+        // Tabs
         document.querySelectorAll('.nav-tab').forEach(tab => {
             tab.addEventListener('click', (e) => this.switchTab(e.target.dataset.tab));
         });
-        
-        // Integração
+        // Integration
         document.getElementById('testIntegration').addEventListener('click', () => this.testIntegration());
         document.getElementById('installTools').addEventListener('click', () => this.installTools());
         document.getElementById('browseYtDlp').addEventListener('click', () => this.browseForYtDlp());
         document.getElementById('browseFfmpeg').addEventListener('click', () => this.browseForFfmpeg());
         
-        // Ferramentas
+        // Tools
         document.getElementById('exportSettings').addEventListener('click', () => this.exportSettings());
         document.getElementById('importSettings').addEventListener('click', () => this.importSettings());
         document.getElementById('resetSettings').addEventListener('click', () => this.resetSettings());
@@ -53,24 +49,24 @@ class SettingsManager {
     }
 
     setupAutoSave() {
-        // Salvar automaticamente quando inputs mudam
+        // Save automatically when form controls change.
         const autoSaveElements = document.querySelectorAll('input, select, textarea');
         autoSaveElements.forEach(element => {
             element.addEventListener('change', () => {
                 this.debounce(() => {
-                    this.saveSettings('Configurações salvas automaticamente');
+                    this.saveSettings('Configura??es salvas automaticamente');
                 }, 1000)();
             });
         });
     }
 
     setupTabNavigation() {
-        // Ativar aba inicial
+        // Activate the initial tab.
         this.switchTab('general');
     }
 
     switchTab(tabName) {
-        // Desativar todas as abas
+        // Deactivate every tab.
         document.querySelectorAll('.nav-tab').forEach(tab => {
             tab.classList.remove('active');
         });
@@ -78,13 +74,12 @@ class SettingsManager {
             content.classList.remove('active');
         });
         
-        // Ativar aba selecionada
+        // Activate the selected tab.
         document.querySelector(`[data-tab="${tabName}"]`).classList.add('active');
         document.getElementById(`${tabName}-tab`).classList.add('active');
         
         this.currentTab = tabName;
-        
-        // Ações específicas por aba
+        // Run tab-specific actions.
         if (tabName === 'integration') {
             this.checkIntegrationStatus();
         } else if (tabName === 'about') {
@@ -97,15 +92,15 @@ class SettingsManager {
             const result = await chrome.storage.sync.get(['videoDownloaderSettings']);
             this.settings = { ...this.defaultSettings, ...result.videoDownloaderSettings };
         } catch (error) {
-            console.error('Erro ao carregar configurações:', error);
+            console.error('Erro ao carregar configura??es:', error);
             this.settings = { ...this.defaultSettings };
         }
     }
 
     populateForm() {
-        // Preencher todos os campos do formulário com as configurações
+        // Populate form controls from stored settings.
         
-        // Aba Geral
+        // General tab
         this.setChecked('detectCloudflare', this.settings.detectCloudflare);
         this.setChecked('detectHls', this.settings.detectHls);
         this.setChecked('detectNative', this.settings.detectNative);
@@ -113,7 +108,7 @@ class SettingsManager {
         this.setChecked('showNotifications', this.settings.showNotifications);
         this.setChecked('badgeCounter', this.settings.badgeCounter);
         
-        // Aba Download
+        // Download tab
         this.setValue('defaultQuality', this.settings.defaultQuality);
         this.setValue('defaultFormat', this.settings.defaultFormat);
         this.setValue('downloadPath', this.settings.downloadPath);
@@ -122,15 +117,13 @@ class SettingsManager {
         this.setChecked('organizeFiles', this.settings.organizeFiles);
         this.setValue('maxConcurrentDownloads', this.settings.maxConcurrentDownloads);
         this.setValue('maxFileSize', this.settings.maxFileSize);
-        
-        // Aba Integração
+        // Integration tab
         this.setValue('ytDlpPath', this.settings.ytDlpPath);
         this.setValue('ffmpegPath', this.settings.ffmpegPath);
         this.setValue('additionalArgs', this.settings.additionalArgs);
         this.setValue('timeout', this.settings.timeout);
         this.setValue('retries', this.settings.retries);
-        
-        // Aba Avançado
+        // Advanced tab
         this.setChecked('anonymousStats', this.settings.anonymousStats);
         this.setChecked('errorReporting', this.settings.errorReporting);
         this.setValue('cacheSize', this.settings.cacheSize);
@@ -140,9 +133,9 @@ class SettingsManager {
     }
 
     saveFormToSettings() {
-        // Coletar valores do formulário e salvar no objeto settings
+        // Copy form values into the settings object.
         
-        // Aba Geral
+        // General tab
         this.settings.detectCloudflare = this.getChecked('detectCloudflare');
         this.settings.detectHls = this.getChecked('detectHls');
         this.settings.detectNative = this.getChecked('detectNative');
@@ -150,7 +143,7 @@ class SettingsManager {
         this.settings.showNotifications = this.getChecked('showNotifications');
         this.settings.badgeCounter = this.getChecked('badgeCounter');
         
-        // Aba Download
+        // Download tab
         this.settings.defaultQuality = this.getValue('defaultQuality');
         this.settings.defaultFormat = this.getValue('defaultFormat');
         this.settings.downloadPath = this.getValue('downloadPath');
@@ -159,15 +152,13 @@ class SettingsManager {
         this.settings.organizeFiles = this.getChecked('organizeFiles');
         this.settings.maxConcurrentDownloads = parseInt(this.getValue('maxConcurrentDownloads'));
         this.settings.maxFileSize = parseInt(this.getValue('maxFileSize'));
-        
-        // Aba Integração
+        // Integration tab
         this.settings.ytDlpPath = this.getValue('ytDlpPath');
         this.settings.ffmpegPath = this.getValue('ffmpegPath');
         this.settings.additionalArgs = this.getValue('additionalArgs');
         this.settings.timeout = parseInt(this.getValue('timeout'));
         this.settings.retries = parseInt(this.getValue('retries'));
-        
-        // Aba Avançado
+        // Advanced tab
         this.settings.anonymousStats = this.getChecked('anonymousStats');
         this.settings.errorReporting = this.getChecked('errorReporting');
         this.settings.cacheSize = this.getValue('cacheSize');
@@ -176,36 +167,34 @@ class SettingsManager {
         this.settings.verboseLogging = this.getChecked('verboseLogging');
     }
 
-    async saveSettings(successMessage = 'Configurações salvas com sucesso!') {
+    async saveSettings(successMessage = 'Configura??es salvas com sucesso!') {
         try {
             this.saveFormToSettings();
             
             await chrome.storage.sync.set({ 
                 videoDownloaderSettings: this.settings 
             });
-            
-            // Notificar background script sobre mudanças
+            // Notify the background service worker about setting changes.
             await chrome.runtime.sendMessage({
                 type: 'SAVE_SETTINGS',
                 settings: this.settings
             });
             
             this.showStatus(successMessage, 'success');
-            
-            // Recarregar estatísticas se necessário
+            // Reload statistics when the current tab needs them.
             if (this.currentTab === 'about') {
                 this.loadStatistics();
             }
             
         } catch (error) {
-            console.error('Erro ao salvar configurações:', error);
-            this.showStatus('Erro ao salvar configurações', 'error');
+            console.error('Erro ao salvar configura??es:', error);
+            this.showStatus('Erro ao salvar configura??es', 'error');
         }
     }
 
     async testIntegration() {
         const statusElement = document.getElementById('integrationStatus');
-        statusElement.textContent = 'Testando integração com servidor local...';
+        statusElement.textContent = 'Testando integra??o com servidor local...';
         statusElement.className = 'status info';
         
         try {
@@ -216,39 +205,38 @@ class SettingsManager {
             const ffprobeOk = !!tools.ffprobe?.installed;
 
             statusElement.textContent = [
-                `yt-dlp: ${ytDlpOk ? 'instalado' : 'não encontrado'}`,
-                `FFmpeg: ${ffmpegOk ? 'instalado' : 'não encontrado'}`,
-                `FFprobe: ${ffprobeOk ? 'instalado' : 'não encontrado'}`
+                `yt-dlp: ${ytDlpOk ? 'instalado' : 'n?o encontrado'}`,
+                `FFmpeg: ${ffmpegOk ? 'instalado' : 'n?o encontrado'}`,
+                `FFprobe: ${ffprobeOk ? 'instalado' : 'n?o encontrado'}`
             ].join(' | ');
             statusElement.className = ytDlpOk && ffmpegOk && ffprobeOk ? 'status success' : 'status warning';
             
         } catch (error) {
-            statusElement.textContent = `Erro ao testar integração: ${error.message}`;
+            statusElement.textContent = `Erro ao testar integra??o: ${error.message}`;
             statusElement.className = 'status error';
         }
     }
 
     async installTools() {
-        this.showStatus('Preparando instalação das ferramentas...', 'info');
+        this.showStatus('Preparando instala??o das ferramentas...', 'info');
         
         try {
-            // Em uma implementação real, isso baixaria e instalaria as ferramentas
-            // Por enquanto, vamos simular a instalação
+            // A production version could replace this placeholder.
+            // Keep this flow local and non-destructive for now.
             
             await new Promise(resolve => setTimeout(resolve, 3000));
-            
-            // Configurar caminhos padrão
+            // Set common default paths.
             this.setValue('ytDlpPath', 'C:\\Program Files\\VideoDownloaderPro\\yt-dlp.exe');
             this.setValue('ffmpegPath', 'C:\\Program Files\\VideoDownloaderPro\\ffmpeg.exe');
             
             this.saveFormToSettings();
             this.showStatus('Ferramentas instaladas com sucesso! Configure os caminhos acima.', 'success');
             
-            // Atualizar status
+            // Refresh integration status.
             this.checkIntegrationStatus();
             
         } catch (error) {
-            this.showStatus(`Erro na instalação: ${error.message}`, 'error');
+            this.showStatus(`Erro na instala??o: ${error.message}`, 'error');
         }
     }
 
@@ -261,8 +249,8 @@ class SettingsManager {
     }
 
     showFilePicker(elementId, title, accept) {
-        // Em uma implementação real, usaria chrome.fileSystem API
-        // Por enquanto, simularemos com um prompt
+            // A production version could replace this placeholder.
+        // The current fallback uses a prompt.
         
         const currentPath = this.getValue(elementId);
         const newPath = prompt(`${title}:\n(Caminho atual: ${currentPath || 'Nenhum'})`, currentPath);
@@ -288,7 +276,7 @@ class SettingsManager {
                 ytDlpVersion.textContent = 'Instalado';
                 ytDlpVersion.style.color = '#10b981';
             } else {
-                ytDlpVersion.textContent = 'Não encontrado';
+                ytDlpVersion.textContent = 'N?o encontrado';
                 ytDlpVersion.style.color = '#ef4444';
             }
             
@@ -296,19 +284,19 @@ class SettingsManager {
                 ffmpegVersion.textContent = 'Instalado';
                 ffmpegVersion.style.color = '#10b981';
             } else {
-                ffmpegVersion.textContent = 'Não encontrado';
+                ffmpegVersion.textContent = 'N?o encontrado';
                 ffmpegVersion.style.color = '#ef4444';
             }
             
         } catch (error) {
-            ytDlpVersion.textContent = 'Erro na verificação';
-            ffmpegVersion.textContent = 'Erro na verificação';
+            ytDlpVersion.textContent = 'Erro na verifica??o';
+            ffmpegVersion.textContent = 'Erro na verifica??o';
         }
     }
 
     async loadStatistics() {
         try {
-            // Carregar estatísticas do storage
+            // Load statistics from storage.
             const result = await chrome.storage.local.get(['videoDownloaderStats']);
             const stats = result.videoDownloaderStats || {
                 videosDetected: 0,
@@ -319,14 +307,14 @@ class SettingsManager {
             document.getElementById('statsDetected').textContent = stats.videosDetected;
             document.getElementById('statsDownloads').textContent = stats.downloadsCompleted;
             
-            // Calcular tempo de atividade
+            // Calculate uptime.
             const uptime = Date.now() - stats.startTime;
             const hours = Math.floor(uptime / (1000 * 60 * 60));
             const minutes = Math.floor((uptime % (1000 * 60 * 60)) / (1000 * 60));
             document.getElementById('statsUptime').textContent = `${hours}h ${minutes}m`;
             
         } catch (error) {
-            console.error('Erro ao carregar estatísticas:', error);
+            console.error('Erro ao carregar estat?sticas:', error);
         }
     }
 
@@ -351,18 +339,18 @@ class SettingsManager {
             
             URL.revokeObjectURL(url);
             
-            this.showStatus('Configurações exportadas com sucesso!', 'success');
+            this.showStatus('Configura??es exportadas com sucesso!', 'success');
             
         } catch (error) {
-            this.showStatus('Erro ao exportar configurações', 'error');
+            this.showStatus('Erro ao exportar configura??es', 'error');
         }
     }
 
     async importSettings() {
-        // Em uma implementação real, usaria file input
-        // Por enquanto, simularemos com um prompt para JSON
+            // A production version could replace this placeholder.
+        // The current fallback accepts JSON through a prompt.
         
-        const jsonData = prompt('Cole o JSON das configurações:');
+        const jsonData = prompt('Cole o JSON das configura??es:');
         if (!jsonData) return;
         
         try {
@@ -372,26 +360,25 @@ class SettingsManager {
                 this.settings = { ...this.settings, ...importedData.settings };
                 this.populateForm();
                 await this.saveSettings();
-                this.showStatus('Configurações importadas com sucesso!', 'success');
+                this.showStatus('Configura??es importadas com sucesso!', 'success');
             } else {
-                throw new Error('Formato de arquivo inválido');
+                throw new Error('Formato de arquivo inv?lido');
             }
             
         } catch (error) {
-            this.showStatus('Erro ao importar configurações: ' + error.message, 'error');
+            this.showStatus('Erro ao importar configura??es: ' + error.message, 'error');
         }
     }
 
     async resetSettings() {
-        if (confirm('Tem certeza que deseja redefinir todas as configurações para os valores padrão?\nEsta ação não pode ser desfeita.')) {
+        if (confirm('Tem certeza que deseja redefinir todas as configura??es para os valores padr?o?\nEsta a??o n?o pode ser desfeita.')) {
             this.settings = { ...this.defaultSettings };
             this.populateForm();
             await this.saveSettings();
-            this.showStatus('Configurações redefinidas para os valores padrão!', 'success');
+            this.showStatus('Configura??es redefinidas para os valores padr?o!', 'success');
         }
     }
-
-    // Métodos de utilidade
+    // Utility methods
     getValue(elementId) {
         const element = document.getElementById(elementId);
         return element ? element.value : '';
@@ -417,15 +404,14 @@ class SettingsManager {
         statusElement.textContent = message;
         statusElement.className = `status ${type}`;
         statusElement.classList.remove('hidden');
-        
-        // Auto-esconder após 5 segundos
+        // Hide automatically after five seconds.
         setTimeout(() => {
             statusElement.classList.add('hidden');
         }, 5000);
     }
 
     goBack() {
-        window.close(); // Fechar a página de opções
+        window.close(); // Close the options page.
     }
 
     openDocumentation() {
@@ -458,7 +444,7 @@ class SettingsManager {
 
     getDefaultSettings() {
         return {
-            // Detecção
+            // Detection
             detectCloudflare: true,
             detectHls: true,
             detectNative: true,
@@ -475,15 +461,14 @@ class SettingsManager {
             organizeFiles: true,
             maxConcurrentDownloads: 1,
             maxFileSize: 0,
-            
-            // Integração
+        // Integration
             ytDlpPath: '',
             ffmpegPath: '',
             additionalArgs: '',
             timeout: 30,
             retries: 3,
-            
-            // Avançado
+
+            // Advanced tab
             anonymousStats: true,
             errorReporting: true,
             cacheSize: '100',
@@ -494,12 +479,12 @@ class SettingsManager {
     }
 }
 
-// Inicializar quando o DOM estiver pronto
+// Initialize when the DOM is ready.
 document.addEventListener('DOMContentLoaded', () => {
     new SettingsManager();
 });
 
-// Adicionar alguns estilos dinâmicos
+// Add dynamic styles.
 const style = document.createElement('style');
 style.textContent = `
     .settings-container {

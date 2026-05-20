@@ -1,5 +1,3 @@
-const SERVER_BASE = "http://localhost:3000";
-
 const groupsEl = document.getElementById("groups");
 const logsEl = document.getElementById("logs");
 const subtitleEl = document.getElementById("subtitle");
@@ -14,7 +12,7 @@ const hasExtensionRuntime =
   chrome.runtime?.sendMessage &&
   chrome.tabs?.query;
 
-// --- VARIÁVEL PARA GUARDAR A URL DA ABA ATUAL ---
+// Stores the URL of the tab that opened the popup.
 let currentActiveTabUrl = "";
 
 document.getElementById("clearAllBtn").addEventListener("click", async () => {
@@ -29,7 +27,7 @@ document.getElementById("clearDownloadedBtn").addEventListener("click", async ()
   await refresh();
 });
 
-// Atualiza ao receber mensagem, aplicando o filtro de aba
+// Re-render store updates after applying the active-tab filter.
 if (hasExtensionRuntime) {
   chrome.runtime.onMessage.addListener((message) => {
     if (message?.type === "STORE_UPDATED" && message.data) {
@@ -38,7 +36,7 @@ if (hasExtensionRuntime) {
     }
   });
 
-  // Ao inicializar o popup, puxa qual aba o usuário está olhando
+  // Read the active tab URL during popup initialization.
   chrome.tabs.query({ active: true, currentWindow: true }).then(tabs => {
     currentActiveTabUrl = tabs[0]?.url || "";
     refresh().catch(console.error);
@@ -65,12 +63,11 @@ async function refresh() {
     return;
   }
 
-  // Aplica o filtro antes de jogar na tela
+  // Apply the active-tab filter before rendering.
   const filteredData = filterDataForTab(response.data, currentActiveTabUrl);
   render(filteredData);
 }
 
-// --- FUNÇÃO QUE FILTRA MÍDIAS DE OUTRAS ABAS ---
 function filterDataForTab(data, activeTabUrl) {
   if (!data || !data.hits) return data;
   const activeBase = getBaseUrl(activeTabUrl);
@@ -79,7 +76,7 @@ function filterDataForTab(data, activeTabUrl) {
   for (const group of data.hits) {
     const filteredGroup = group.filter(hit => {
       const isCurrentPage = activeBase && getBaseUrl(hit.page_url) === activeBase;
-      // Mostra apenas se for da página atual OU se o usuário clicou para baixar/fixar
+      // Keep current-page items plus items that are already part of a user action.
       return isCurrentPage || hit.status === 'running' || hit.status === 'pinned' || hit.status === 'downloaded';
     });
     if (filteredGroup.length > 0) {
@@ -97,8 +94,6 @@ function getBaseUrl(u) {
     return String(u || '');
   }
 }
-// --------------------------------------------------
-
 function render(data) {
   currentData = structuredCloneSafe(data);
 
@@ -380,10 +375,10 @@ function sourceVariantPriority(variant) {
     variant?.media_url &&
     /\.m3u8(?:$|\?)/i.test(variant.media_url);
 
-  // Prioridade máxima para playlists-filhas reais do HLS
+  // Prefer real HLS child playlists over generic fallback variants.
   if (isConcreteHlsVariant) score += 5000;
 
-  // DASH/file com seletor real do yt-dlp continua forte
+  // Real yt-dlp selectors remain stronger than generic stream fallbacks.
   if (variant.ytdlp_format_id) score += 2000;
 
   if (variant.sourceType === "hls") score += 300;
@@ -644,18 +639,6 @@ async function runDisplayAction(action, displayHit, variantId, doRefresh = true)
   }
 
   return lastResult;
-}
-
-function resolveActionSourceHitIds(action, displayHit, variant) {
-  if (action === "download" || action === "download_as" || action === "copy") {
-    return [variant?.sourceHitId || displayHit.primaryHitId || displayHit.id].filter(Boolean);
-  }
-
-  if (action === "pin" || action === "forget") {
-    return (displayHit.displaySourceHitIds || [displayHit.primaryHitId || displayHit.id]).filter(Boolean);
-  }
-
-  return [displayHit.primaryHitId || displayHit.id].filter(Boolean);
 }
 
 function pickDisplayVariant(hit, requestedId) {

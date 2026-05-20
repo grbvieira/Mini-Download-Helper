@@ -1228,8 +1228,7 @@ function buildHlsVariants(url, manifest) {
 
 async function maybeEnrichAdaptiveVariants({ url, referer, type, currentVariants }) {
   const variants = { ...(currentVariants || {}) };
-
-  // --- NOVA INJEÇÃO: Garante a opção de baixar o HLS original/completo ---
+  // Always expose the original adaptive stream as a maximum-quality option.
   if (type === "hls" || type === "dash") {
     const maxId = `max_${hashString(url)}`;
     variants[maxId] = {
@@ -1239,8 +1238,8 @@ async function maybeEnrichAdaptiveVariants({ url, referer, type, currentVariants
       ext: "mp4",
       mime: type === "dash" ? "application/dash+xml" : "application/vnd.apple.mpegurl",
       audio_only: false,
-      width: 9999, // Força a ficar no topo pelo score
-      height: 0,   // Deixa zero para não printar 9999p
+      width: 9999, // Keep this option at the top of the score order.
+      height: 0,   // Avoid displaying this synthetic option as 9999p.
       bandwidth: 99999999,
       ytdlp_format_id: "best",
       sourceType: type
@@ -1448,8 +1447,7 @@ function buildDashVariants(url, manifest) {
 
 function describeVariant(variant) {
   if (!variant) return "Auto";
-
-  // Retorna o texto customizado se for a qualidade máxima
+  // Preserve the custom label for the maximum-quality option.
   if (variant.label === "Qualidade Máxima (Original)") return variant.label;
 
   if (variant.audio_only) {

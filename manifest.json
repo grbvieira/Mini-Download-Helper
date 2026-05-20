@@ -1,35 +1,35 @@
 {
   "manifest_version": 3,
-  "name": "Video Downloader Pro",
-  "version": "1.0",
-  "description": "Download avançado de vídeos com yt-dlp",
+  "name": "Mini Download Helper",
+  "version": "1.0.0",
+  "description": "Detecta mídia, agrupa variantes e permite baixar arquivos diretos.",
   "permissions": [
-    "activeTab",
     "storage",
+    "tabs",
     "downloads",
-    "notifications",
-    "http://localhost:3000/*"
+    "webRequest"
   ],
   "host_permissions": [
-    "http://localhost:3000/*",
-    "https://*/*",
-    "http://*/*"
+    "<all_urls>"
   ],
-  "action": {
-    "default_popup": "popup.html"
-  },
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Mini Download Helper",
+    "default_popup": "popup.html"
   },
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
       "js": ["content.js"],
-      "run_at": "document_start"
+      "run_at": "document_idle",
+      "all_frames": true
     }
   ],
   "content_security_policy": {
-    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; img-src 'self' data: https:;"
+    "extension_pages": "script-src 'self'; object-src 'self'; img-src 'self' data: https: http://localhost:3000; connect-src 'self' http://localhost:3000 ws://localhost:3000 https: http:;"
   },
   "icons": {
     "16": "icons/icon16.png",

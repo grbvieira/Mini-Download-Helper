@@ -1,213 +1,240 @@
-// content.js - VERSÃO: ESPIÃO INTELIGENTE (COM THUMBNAILS)
+(() => {
+  const sent = new Set();
 
-// 1. Script injetado que entende JSON
-const spyScript = `
-(function() {
-    // Função recursiva para caçar vídeos e thumbs dentro de objetos JSON
-    function scanObjectForMedia(obj) {
-        if (!obj || typeof obj !== 'object') return;
+  function safeSend(items) {
+    if (!items.length) return;
+    chrome.runtime.sendMessage({
+      type: "REGISTER_CANDIDATES",
+      items
+    }).catch(() => {});
+  }
 
-        // Se for array, varre cada item
-        if (Array.isArray(obj)) {
-            obj.forEach(item => scanObjectForMedia(item));
-            return;
-        }
+  function normalizeUrl(url) {
+    try {
+      return new URL(url, location.href).href;
+    } catch {
+      return "";
+    }
+  }
 
-        // Se for objeto, procura pares de vídeo/imagem
-        let foundVideo = null;
-        let foundImage = null;
-        
-        const keys = Object.keys(obj);
-        
-        // Passo 1: Identifica candidatos
-        keys.forEach(key => {
-            const value = obj[key];
-            if (typeof value === 'string') {
-                // É vídeo? (mp4, m3u8, mpd, mov)
-                if (value.match(/https?:.*\\.(mp4|m3u8|mpd|mov)(\\?.*)?$/i)) {
-                    foundVideo = value;
-                }
-                // É imagem? (jpg, png, webp, jpeg)
-                else if (value.match(/https?:.*\\.(jpg|jpeg|png|webp)(\\?.*)?$/i)) {
-                    // Prioriza imagens que tenham "thumb", "poster" ou "preview" no nome da chave ou valor
-                    if (!foundImage || key.match(/thumb|poster|cover|preview/i)) {
-                        foundImage = value;
-                    }
-                }
-            }
-            // Continua a busca profunda (recursão)
-            else if (typeof value === 'object') {
-                scanObjectForMedia(value);
-            }
-        });
+  function isUsefulImage(url) {
+    if (!url) return false;
+    if (/^data:/i.test(url)) return false;
+    if (/sprite|avatar|icon|logo|emoji|badge/i.test(url)) return false;
+    return true;
+  }
 
-        // Passo 2: Se achou vídeo neste nível, manda pra extensão
-        if (foundVideo) {
-            // Limpa barras invertidas de JSON
-            const cleanVideo = foundVideo.replace(/\\\\/g, '/');
-            const cleanThumb = foundImage ? foundImage.replace(/\\\\/g, '/') : null;
+  function getMetaThumbnail() {
+    const selectors = [
+      'meta[property="og:image"]',
+      'meta[property="og:image:url"]',
+      'meta[name="twitter:image"]',
+      'meta[name="twitter:image:src"]',
+      'link[rel="image_src"]',
+      'link[rel="preload"][as="image"]'
+    ];
 
-            window.dispatchEvent(new CustomEvent('VideoDownloader_Found', {
-                detail: { 
-                    url: cleanVideo,
-                    thumbnail: cleanThumb
-                }
-            }));
-        }
+    for (const selector of selectors) {
+      const el = document.querySelector(selector);
+      if (!el) continue;
+      const value =
+        el.getAttribute("content") ||
+        el.getAttribute("href") ||
+        "";
+      const full = normalizeUrl(value);
+      if (isUsefulImage(full)) return full;
     }
 
-    function tryParseAndScan(data) {
-        if (typeof data !== 'string') return;
-        
-        try {
-            // Tenta tratar como JSON
-            const json = JSON.parse(data);
-            scanObjectForMedia(json);
-        } catch (e) {
-            // Se falhar o JSON, usa o método antigo (Regex Bruta) como fallback
-            // mas agora tentando pegar thumbs vizinhas é muito difícil via Regex, 
-            // então foca no JSON que é 99% dos casos de carrossel.
+    return "";
+  }
+
+  function getLargestPageImage() {
+    const imgs = [...document.images]
+      .map(img => {
+        const src = normalizeUrl(img.currentSrc || img.src || "");
+        return {
+          src,
+          width: img.naturalWidth || img.width || 0,
+          height: img.naturalHeight || img.height || 0,
+          area: (img.naturalWidth || img.width || 0) * (img.naturalHeight || img.height || 0)
+        };
+      })
+      .filter(img =>
+        isUsefulImage(img.src) &&
+        img.width >= 200 &&
+        img.height >= 100
+      )
+      .sort((a, b) => b.area - a.area);
+
+    return imgs[0]?.src || "";
+  }
+
+  function getBestThumbnail(preferred = "") {
+    const poster = normalizeUrl(preferred || "");
+    if (isUsefulImage(poster)) return poster;
+
+    const metaThumb = getMetaThumbnail();
+    if (metaThumb) return metaThumb;
+
+    const largestImg = getLargestPageImage();
+    if (largestImg) return largestImg;
+
+    return "";
+  }
+
+  function collectFromDom() {
+    const items = [];
+    const pageThumb = getBestThumbnail();
+
+    for (const video of document.querySelectorAll("video")) {
+      const poster = getBestThumbnail(video.poster || pageThumb);
+      const currentSrc = normalizeUrl(video.currentSrc || video.src);
+
+      if (currentSrc && !sent.has(currentSrc)) {
+        sent.add(currentSrc);
+        items.push({
+          url: currentSrc,
+          type: guessType(currentSrc),
+          mime: "",
+          title: document.title,
+          pageUrl: location.href,
+          thumbnail: poster || pageThumb || null
+        });
+      }
+
+      for (const source of video.querySelectorAll("source")) {
+        const src = normalizeUrl(source.src);
+        if (src && !sent.has(src)) {
+          sent.add(src);
+          items.push({
+            url: src,
+            type: guessType(src),
+            mime: source.type || "",
+            title: document.title,
+            pageUrl: location.href,
+            thumbnail: poster || pageThumb || null
+          });
         }
+      }
     }
 
-    // --- INTERCEPTA FETCH ---
-    const originalFetch = window.fetch;
-    window.fetch = async function(...args) {
-        const response = await originalFetch(...args);
-        const clone = response.clone();
-        clone.text().then(text => tryParseAndScan(text)).catch(() => {});
-        return response;
-    };
-
-    // --- INTERCEPTA XHR ---
-    const originalOpen = XMLHttpRequest.prototype.open;
-    XMLHttpRequest.prototype.open = function(...args) {
-        this.addEventListener('load', function() {
-            tryParseAndScan(this.responseText);
+    for (const audio of document.querySelectorAll("audio")) {
+      const currentSrc = normalizeUrl(audio.currentSrc || audio.src);
+      if (currentSrc && !sent.has(currentSrc)) {
+        sent.add(currentSrc);
+        items.push({
+          url: currentSrc,
+          type: "file",
+          mime: "",
+          title: document.title,
+          pageUrl: location.href,
+          thumbnail: pageThumb || null
         });
-        originalOpen.apply(this, args);
-    };
+      }
+
+      for (const source of audio.querySelectorAll("source")) {
+        const src = normalizeUrl(source.src);
+        if (src && !sent.has(src)) {
+          sent.add(src);
+          items.push({
+            url: src,
+            type: "file",
+            mime: source.type || "",
+            title: document.title,
+            pageUrl: location.href,
+            thumbnail: pageThumb || null
+          });
+        }
+      }
+    }
+
+    safeSend(items);
+  }
+
+  function guessType(url) {
+    if (/\.m3u8(?:$|\?)/i.test(url)) return "hls";
+    if (/\.mpd(?:$|\?)/i.test(url)) return "dash";
+    return "file";
+  }
+
+  function reportUrl(url, mime = "") {
+    const full = normalizeUrl(url);
+    if (!full || sent.has(full)) return;
+    if (/^blob:/i.test(full) || /^data:/i.test(full)) return;
+    if (/\.(m4s|ts|m4f|cmfa|cmfv)(?:$|\?)/i.test(full)) return;
+
+    sent.add(full);
+
+    safeSend([{
+      url: full,
+      type: guessType(full),
+      mime,
+      title: document.title,
+      pageUrl: location.href,
+      thumbnail: getBestThumbnail()
+    }]);
+  }
+
+  const originalFetch = window.fetch;
+  window.fetch = async (...args) => {
+    const request = args[0];
+    const url =
+      typeof request === "string"
+        ? request
+        : request?.url || "";
+
+    if (url) reportUrl(url);
+
+    const response = await originalFetch(...args);
+
+    try {
+      const ct = response.headers.get("content-type") || "";
+      if (/^(video|audio)\//i.test(ct) || /mpegurl|dash\+xml/i.test(ct)) {
+        reportUrl(response.url || url, ct);
+      }
+    } catch {}
+
+    return response;
+  };
+
+  const originalOpen = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+    this.__mdh_url = url;
+    return originalOpen.call(this, method, url, ...rest);
+  };
+
+  const originalSend = XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.send = function(...args) {
+    this.addEventListener("load", () => {
+      try {
+        const ct = this.getResponseHeader("content-type") || "";
+        const candidate = this.responseURL || this.__mdh_url || "";
+        if (
+          /^(video|audio)\//i.test(ct) ||
+          /mpegurl|dash\+xml/i.test(ct) ||
+          /\.m3u8(?:$|\?)/i.test(candidate) ||
+          /\.mpd(?:$|\?)/i.test(candidate)
+        ) {
+          reportUrl(candidate, ct);
+        }
+      } catch {}
+    });
+
+    return originalSend.apply(this, args);
+  };
+
+  collectFromDom();
+
+  const observer = new MutationObserver(() => {
+    collectFromDom();
+  });
+
+  observer.observe(document.documentElement || document.body, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["src", "poster", "content"]
+  });
+
+  setInterval(collectFromDom, 4000);
 })();
-`;
-
-// 2. Classe Principal
-class VideoDetector {
-    constructor() {
-        this.detectedVideos = new Map();
-        this.initialize();
-    }
-
-    initialize() {
-        this.injectSpy();
-        this.setupMessageListener();
-        this.startDomMonitoring();
-        setTimeout(() => this.scanDom(), 1000);
-    }
-
-    injectSpy() {
-        const script = document.createElement('script');
-        script.textContent = spyScript;
-        (document.head || document.documentElement).appendChild(script);
-        script.remove();
-
-        window.addEventListener('VideoDownloader_Found', (e) => {
-            if (e.detail && e.detail.url) {
-                this.addVideo(e.detail.url, 'api_json', null, { 
-                    thumbnail: e.detail.thumbnail 
-                });
-            }
-        });
-    }
-
-    setupMessageListener() {
-        chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-            if (request.action === 'detectVideos') {
-                this.scanDom();
-                sendResponse({ 
-                    success: true, 
-                    videos: Array.from(this.detectedVideos.values()),
-                    count: this.detectedVideos.size
-                });
-            }
-        });
-    }
-
-    startDomMonitoring() {
-        const observer = new MutationObserver(() => this.scanDom());
-        observer.observe(document, { childList: true, subtree: true });
-    }
-
-    scanDom() {
-        // Varredura visual (Tags <video>, Iframes)
-        document.querySelectorAll('video').forEach(v => {
-            const src = v.currentSrc || v.src;
-            if (src && src.startsWith('http')) {
-                this.addVideo(src, 'video_tag', v, { thumbnail: v.poster });
-            }
-        });
-
-        document.querySelectorAll('iframe[src*="cloudflarestream"]').forEach(iframe => {
-            const match = iframe.src.match(/cloudflarestream\.com\/([^\/]+)\/iframe/);
-            if (match) {
-                const url = `https://customer-00w7xjj4f45btxqw.cloudflarestream.com/${match[1]}/manifest/video.m3u8`;
-                const thumb = `https://customer-00w7xjj4f45btxqw.cloudflarestream.com/${match[1]}/thumbnails/thumbnail.jpg`;
-                this.addVideo(url, 'cloudflare', iframe, { thumbnail: thumb });
-            }
-        });
-    }
-
-    addVideo(url, source, element = null, extraData = {}) {
-        if (!url || !url.startsWith('http')) return;
-        if (url.match(/\.(js|css|html|jpg|png|svg)/i)) return; // Ignora se a URL principal for imagem
-
-        const cleanKey = url.split('?')[0];
-
-        // Se já existe, atualiza a thumbnail se a nova for melhor
-        if (this.detectedVideos.has(cleanKey)) {
-            const existing = this.detectedVideos.get(cleanKey);
-            if (!existing.thumbnail && extraData.thumbnail) {
-                existing.thumbnail = extraData.thumbnail;
-                this.notifyExtension();
-            }
-            return;
-        }
-
-        // Tenta descobrir o título
-        let title = 'Vídeo Detectado';
-        if (element) {
-            title = element.getAttribute('title') || 
-                    element.getAttribute('aria-label') || 
-                    element.closest('[data-title]')?.getAttribute('data-title') ||
-                    document.title;
-        } else {
-            try {
-                const parts = url.split('?')[0].split('/');
-                const filename = parts[parts.length - 1];
-                if (filename && filename.length > 3) title = decodeURIComponent(filename);
-            } catch(e){}
-        }
-
-        this.detectedVideos.set(cleanKey, {
-            id: `vid-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-            url: url,
-            title: title,
-            thumbnail: extraData.thumbnail || '', // Usa a thumb capturada do JSON
-            type: source,
-            pageUrl: window.location.href,
-            qualities: [{ id: 'auto', name: 'Automático', resolution: 'HD', size: '?' }]
-        });
-        
-        this.notifyExtension();
-    }
-    
-    notifyExtension() {
-        try {
-            chrome.runtime.sendMessage({
-                action: 'videosDetected',
-                count: this.detectedVideos.size
-            });
-        } catch(e) {}
-    }
-}
-
-new VideoDetector();
