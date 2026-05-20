@@ -244,6 +244,7 @@ function mergeDisplayHits(target, source) {
   target.thumbnail = chooseBetterThumbnail(target.thumbnail, source.thumbnail);
   target.page_url = target.page_url || source.page_url;
   target.filename = chooseBetterFilename(target.filename, source.filename);
+  target.duration = target.duration || source.duration;
   target.lastSeenAt = Math.max(target.lastSeenAt || 0, source.lastSeenAt || 0);
   target.displaySourceHitIds = uniqueArray([...(target.displaySourceHitIds || []), source.id]);
   target.pinned = !!target.pinned || !!source.pinned;
@@ -845,7 +846,7 @@ function describeVariant(variant) {
   if (!variant) return "Auto";
 
   if (variant.label === "Qualidade Máxima (Original)") return variant.label;
-  if (variant.sourceType === "youtube_fmt" && variant.label) return normalizeVariantLabel(variant.label);
+  if (variant.sourceType === "youtube_fmt" && variant.label) return variant.label;
 
   if (variant.audio_only) {
     if (variant.bandwidth) {
@@ -902,12 +903,23 @@ function buildGroupMeta(group) {
   const variants = getSortedVariants(hit);
   const labels = variants.map(v => describeVariant(v)).filter(Boolean);
   const uniqueLabels = [...new Set(labels)];
+  const duration = formatDuration(hit.duration);
 
   if (!uniqueLabels.length) {
-    return `${group.length} item(ns)`;
+    return [duration, `${group.length} item(ns)`].filter(Boolean).join(" • ");
   }
 
-  return uniqueLabels.join(" • ");
+  return [duration, uniqueLabels.join(" • ")].filter(Boolean).join(" • ");
+}
+
+function formatDuration(seconds) {
+  const total = Math.round(Number(seconds) || 0);
+  if (!total) return "";
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (h) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  return `${m}:${String(s).padStart(2, "0")}`;
 }
 
 function prettyType(type) {

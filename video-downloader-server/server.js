@@ -518,7 +518,13 @@ app.post('/list-formats', async (req, res) => {
       });
     }
 
-    res.json({ success: true, formats });
+    res.json({
+      success: true,
+      title: info.title || '',
+      duration: info.duration ?? null,
+      thumbnail: info.thumbnail || '',
+      formats
+    });
   } catch (error) {
     console.error('[list-formats ERROR]:', error.message);
     res.json({ success: false, error: 'Falha ao listar formatos', details: error.message });

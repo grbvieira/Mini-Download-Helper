@@ -16,6 +16,7 @@ const DIRECT_MEDIA_MIME_RE = /^(video|audio)\//i;
 const SERVER_BASE = "http://localhost:3000";
 const SETTINGS_KEY = "videoDownloaderSettings";
 const PAGE_THUMB_CACHE_TTL_MS = 15000;
+const PAGE_FORMAT_CACHE_TTL_MS = 60000;
 
 const store = {
   hitsById: {},
@@ -36,6 +37,7 @@ let settings = { ...defaultSettings };
 let persistTimer = null;
 let loaded = false;
 const pageThumbCache = new Map();
+const pageFormatCache = new Map();
 
 init().catch(err => {
   console.error("Init error:", err);
@@ -69,6 +71,8 @@ async function init() {
   chrome.downloads.onChanged.addListener(onDownloadChanged);
   chrome.downloads.onErased.addListener(onDownloadErased);
   chrome.storage.onChanged.addListener(onStorageChanged);
+  chrome.tabs.onUpdated.addListener(onTabUpdated);
+  chrome.tabs.onActivated.addListener(onTabActivated);
 
   loaded = true;
   notifyPopup();
@@ -190,6 +194,22 @@ async function onCompleted(details) {
   }
 }
 
+function onTabUpdated(tabId, changeInfo, tab) {
+  const url = changeInfo.url || tab?.url || "";
+  if (changeInfo.status === "complete" || changeInfo.url) {
+    maybeRegisterYouTubePage(tabId, url, tab?.title).catch(error => {
+      addLog("warn", `Falha ao analisar YouTube: ${error.message}`);
+    });
+  }
+}
+
+async function onTabActivated(activeInfo) {
+  const tab = await safeGetTab(activeInfo.tabId);
+  await maybeRegisterYouTubePage(activeInfo.tabId, tab?.url || "", tab?.title || "").catch(error => {
+    addLog("warn", `Falha ao analisar YouTube: ${error.message}`);
+  });
+}
+
 async function registerNetworkMedia(details, type, contentType, headers) {
   if (!details || details.tabId < 0) return;
 
@@ -199,6 +219,11 @@ async function registerNetworkMedia(details, type, contentType, headers) {
   const headerFilename = filenameFromContentDisposition(headers["content-disposition"]);
 
   if (shouldIgnoreUrl(pageUrl) || isBlacklisted(details.url)) return;
+  if (isYouTubeWatchUrl(pageUrl)) {
+    maybeRegisterYouTubePage(details.tabId, pageUrl, pageTitle).catch(error => {
+      addLog("warn", `Falha ao enriquecer YouTube: ${error.message}`);
+    });
+  }
   const pageThumbnail = await collectPageThumbnailFromTab(details.tabId, pageUrl);
 
   const hit = await buildHitFromUrl({
@@ -234,6 +259,11 @@ async function registerCandidate(item, sender, source) {
   const tab = await safeGetTab(tabId);
   const pageUrl = item.pageUrl || tab?.url || "";
   const pageTitle = item.title || tab?.title || "";
+  if (isYouTubeWatchUrl(pageUrl)) {
+    maybeRegisterYouTubePage(tabId, pageUrl, pageTitle).catch(error => {
+      addLog("warn", `Falha ao enriquecer YouTube: ${error.message}`);
+    });
+  }
   const pageThumbnail = item.thumbnail || await collectPageThumbnailFromTab(tabId, pageUrl);
 
   if (shouldIgnoreUrl(item.url) || shouldIgnoreUrl(pageUrl) || isBlacklisted(item.url)) {
@@ -255,6 +285,74 @@ async function registerCandidate(item, sender, source) {
   if (!hit) return;
 
   addOrMergeHit(hit);
+}
+
+async function maybeRegisterYouTubePage(tabId, pageUrl, titleHint = "") {
+  if (!isYouTubeWatchUrl(pageUrl)) return;
+
+  const normalizedPageUrl = normalizeYouTubeWatchUrl(pageUrl);
+  if (!normalizedPageUrl) return;
+
+  const cached = pageFormatCache.get(normalizedPageUrl);
+  if (cached?.pending) return cached.pending;
+  if (cached?.at && Date.now() - cached.at < PAGE_FORMAT_CACHE_TTL_MS && cached.hitId) {
+    return;
+  }
+
+  const pending = registerYouTubePageHit(tabId, normalizedPageUrl, titleHint)
+    .finally(() => {
+      const latest = pageFormatCache.get(normalizedPageUrl);
+      if (latest?.pending === pending) {
+        pageFormatCache.set(normalizedPageUrl, {
+          ...latest,
+          pending: null,
+          at: Date.now()
+        });
+      }
+    });
+
+  pageFormatCache.set(normalizedPageUrl, { pending, at: Date.now() });
+  return pending;
+}
+
+async function registerYouTubePageHit(tabId, pageUrl, titleHint = "") {
+  const tab = await safeGetTab(tabId);
+  const pageTitle = normalizeYouTubeTitle(titleHint || tab?.title || "");
+  const pageThumbnail = await collectPageThumbnailFromTab(tabId, pageUrl);
+  const formatInfo = await fetchServerFormatInfo(pageUrl, pageUrl);
+  const variants = mapYouTubePageFormatsToVariants(formatInfo.formats, pageUrl);
+
+  if (!Object.keys(variants).length) return;
+
+  const title = normalizeTitle(formatInfo.title || pageTitle || "YouTube");
+  const hit = {
+    id: makeId(buildYouTubeFingerprint(pageUrl)),
+    group: "",
+    tabId,
+    page_url: pageUrl,
+    title,
+    filename: suggestFilename(pageUrl, "youtube", title),
+    status: "active",
+    mime: "text/html",
+    length: null,
+    duration: Number.isFinite(formatInfo.duration) ? formatInfo.duration : null,
+    type: "file",
+    url: pageUrl,
+    source: "youtube_page",
+    downloadStrategy: "ytdlp_page",
+    thumbnail: formatInfo.thumbnail || pageThumbnail || null,
+    pinned: false,
+    actions: ["download", "download_as", "copy", "pin", "forget"],
+    variants,
+    createdAt: Date.now(),
+    lastSeenAt: Date.now(),
+    fingerprint: buildYouTubeFingerprint(pageUrl)
+  };
+
+  hit.group = buildGroupKey(hit);
+  addOrMergeHit(hit);
+  removeStaleYouTubeMediaHits(pageUrl, hit.id);
+  pageFormatCache.set(pageUrl, { at: Date.now(), hitId: hit.id, pending: null });
 }
 
 async function maybeGenerateServerThumbnail({ url, pageUrl, title, thumbnail }) {
@@ -418,6 +516,8 @@ function addOrMergeHit(hit) {
     existing.page_url = existing.page_url || hit.page_url;
     existing.mime = existing.mime || hit.mime;
     existing.filename = existing.filename || hit.filename;
+    existing.duration = existing.duration || hit.duration;
+    existing.downloadStrategy = existing.downloadStrategy || hit.downloadStrategy;
     existing.status = existing.pinned
       ? "pinned"
       : existing.status === "downloaded"
@@ -430,6 +530,27 @@ function addOrMergeHit(hit) {
 
   schedulePersist();
   notifyPopup();
+}
+
+function removeStaleYouTubeMediaHits(pageUrl, keepId) {
+  const normalized = normalizeYouTubeWatchUrl(pageUrl);
+  if (!normalized) return;
+
+  let changed = false;
+  for (const [id, hit] of Object.entries(store.hitsById)) {
+    if (id === keepId) continue;
+    const samePage = normalizeYouTubeWatchUrl(hit.page_url || "") === normalized;
+    if (samePage && isYouTubeMediaUrl(hit.url || "")) {
+      delete store.hitsById[id];
+      delete store.progress[id];
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    schedulePersist();
+    notifyPopup();
+  }
 }
 
 function mergeVariants(existingHit, newVariants) {
@@ -1285,8 +1406,10 @@ function shouldUseYtDlpForFile(hit, variant) {
 
 function ytdlpQualityForVariant(variant) {
   if (variant?.sourceType === "youtube_fmt" && variant.ytdlp_format_id && !variant.audio_only) {
-    if (variant.has_audio) return variant.ytdlp_format_id;
-    return `${variant.ytdlp_format_id}+bestaudio/best`;
+    return variant.ytdlp_format_id;
+  }
+  if (variant?.sourceType === "youtube_fmt" && variant.audio_only && variant.ytdlp_format_id) {
+    return variant.ytdlp_format_id;
   }
   return normalizeDefaultQuality(settings.defaultQuality);
 }
@@ -1333,6 +1456,17 @@ function isYouTubePageUrl(url) {
   return !!parsed && YOUTUBE_PAGE_RE.test(parsed.hostname);
 }
 
+function isYouTubeWatchUrl(url) {
+  const parsed = safeUrl(url);
+  if (!parsed || !isYouTubePageUrl(url)) return false;
+  return !!youtubeVideoId(url);
+}
+
+function normalizeYouTubeWatchUrl(url) {
+  const id = youtubeVideoId(url);
+  return id ? `https://www.youtube.com/watch?v=${encodeURIComponent(id)}` : "";
+}
+
 function isYouTubeMediaUrl(url) {
   const parsed = safeUrl(url);
   return !!parsed && YOUTUBE_MEDIA_RE.test(parsed.hostname) && /\/videoplayback$/i.test(parsed.pathname);
@@ -1344,6 +1478,10 @@ function youtubeVideoId(url) {
   if (/youtu\.be$/i.test(parsed.hostname)) return parsed.pathname.split("/").filter(Boolean)[0] || "";
   if (/\/shorts\//i.test(parsed.pathname)) return parsed.pathname.split("/").filter(Boolean)[1] || "";
   return parsed.searchParams.get("v") || "";
+}
+
+function normalizeYouTubeTitle(title) {
+  return String(title || "").replace(/\s*-\s*YouTube\s*$/i, "").trim();
 }
 
 function numberParam(params, key) {
@@ -1566,6 +1704,11 @@ async function maybeEnrichAdaptiveVariants({ url, referer, type, currentVariants
 }
 
 async function fetchServerFormats(url, referer) {
+  const info = await fetchServerFormatInfo(url, referer);
+  return info.formats;
+}
+
+async function fetchServerFormatInfo(url, referer) {
   const response = await fetch(`${SERVER_BASE}/list-formats`, {
     method: "POST",
     headers: {
@@ -1582,7 +1725,12 @@ async function fetchServerFormats(url, referer) {
     throw new Error(json?.error || "Falha ao listar formatos no servidor local");
   }
 
-  return Array.isArray(json.formats) ? json.formats : [];
+  return {
+    title: json.title || "",
+    duration: Number.isFinite(json.duration) ? json.duration : null,
+    thumbnail: json.thumbnail || "",
+    formats: Array.isArray(json.formats) ? json.formats : []
+  };
 }
 
 function mapServerFormatsToVariants(formats, url, type) {
@@ -1606,6 +1754,41 @@ function mapServerFormatsToVariants(formats, url, type) {
       bandwidth: null,
       ytdlp_format_id: ytdlpFormat,
       sourceType: type === "hls" ? "hls_fallback" : type
+    };
+  }
+
+  return out;
+}
+
+function mapYouTubePageFormatsToVariants(formats, pageUrl) {
+  const out = {};
+
+  for (const format of formats || []) {
+    const parsed = parseResolutionLike(format.resolution || format.name || "");
+    const isAudioOnly = !!format.isAudioOnly;
+    const id = `ytp_${hashString(`${pageUrl}::${format.id}::${format.resolution || ""}`)}`;
+    const ext = format.ext || (isAudioOnly ? "m4a" : "mp4");
+    const label = [
+      format.originalId ? `FMT ${format.originalId}` : "FMT",
+      isAudioOnly ? "audio" : parsed.height ? `${parsed.height}p` : normalizeVariantLabel(format.resolution || ""),
+      ext.toUpperCase(),
+      format.size && format.size !== "—" ? format.size : ""
+    ].filter(Boolean).join(" ");
+
+    out[id] = {
+      id,
+      label,
+      media_url: pageUrl,
+      ext,
+      mime: "",
+      audio_only: isAudioOnly,
+      width: parsed.width,
+      height: parsed.height,
+      bandwidth: null,
+      ytdlp_format_id: format.id || "best",
+      original_format_id: format.originalId || format.id || "best",
+      has_audio: !!format.hasAudio,
+      sourceType: "youtube_fmt"
     };
   }
 
