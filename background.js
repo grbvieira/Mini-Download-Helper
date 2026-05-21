@@ -429,6 +429,34 @@ async function maybeGenerateServerThumbnail({ url, pageUrl, title, thumbnail }) 
   }
 }
 
+async function maybeProbeServerOrientation({ url, fallbackUrl, pageUrl }) {
+  if (!url) return null;
+
+  try {
+    const response = await fetch(`${SERVER_BASE}/probe-orientation`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        url,
+        referer: pageUrl || "https://example.com",
+        headers: getDownloadHeadersForUrl(url, [fallbackUrl])
+      })
+    });
+
+    const json = await response.json();
+    if (json?.success && json.orientation?.hasVideo) {
+      return json.orientation;
+    }
+
+    return null;
+  } catch (error) {
+    addLog("warn", `Falha ao analisar orientacao: ${error.message}`);
+    return null;
+  }
+}
+
 async function buildHitFromUrl({
   url,
   type,
@@ -465,6 +493,7 @@ async function buildHitFromUrl({
     url: cleanUrl,
     source,
     thumbnail: thumbnail || null,
+    orientation: null,
     pinned: false,
     actions: ["download", "download_as", "copy", "pin", "forget"],
     variants: {},
@@ -543,6 +572,17 @@ async function buildHitFromUrl({
     });
   }
 
+  if (!baseInfo.orientation) {
+    const bestVariant = Object.values(baseInfo.variants || {}).sort((a, b) => variantScore(b) - variantScore(a))[0];
+    const probeSourceUrl = bestVariant?.media_url || baseInfo.url;
+
+    baseInfo.orientation = await maybeProbeServerOrientation({
+      url: probeSourceUrl,
+      fallbackUrl: baseInfo.url,
+      pageUrl: baseInfo.page_url
+    });
+  }
+
   return baseInfo;
 }
 
@@ -560,6 +600,7 @@ function addOrMergeHit(hit) {
     existing.mime = existing.mime || hit.mime;
     existing.filename = existing.filename || hit.filename;
     existing.duration = existing.duration || hit.duration;
+    existing.orientation = existing.orientation || hit.orientation;
     existing.downloadStrategy = existing.downloadStrategy || hit.downloadStrategy;
     existing.status = existing.pinned
       ? "pinned"
