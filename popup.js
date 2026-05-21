@@ -511,6 +511,7 @@ function pickDisplayProgress(hit, progressMap) {
 
 function renderItem(hit, progress) {
   const node = itemTemplate.content.firstElementChild.cloneNode(true);
+  const cancellable = isDownloadCancellable(hit, progress);
 
   const thumb = node.querySelector(".thumb");
   thumb.src = hit.thumbnail || createPlaceholderThumb(hit.type);
@@ -590,6 +591,9 @@ function renderItem(hit, progress) {
   });
 
   cancelBtn.addEventListener("click", async () => {
+    if (cancelBtn.disabled) return;
+    cancelBtn.disabled = true;
+    cancelBtn.textContent = "Cancelando...";
     await runDisplayAction("cancel", hit, select.value);
   });
 
@@ -612,9 +616,15 @@ function renderItem(hit, progress) {
   if (hit.status === "running") {
     downloadBtn.disabled = true;
     downloadAsBtn.disabled = true;
+  }
+
+  if (cancellable) {
     cancelBtn.classList.remove("hidden");
+    cancelBtn.disabled = !!progress?.cancelling;
+    cancelBtn.textContent = progress?.cancelling ? "Cancelando..." : "Cancelar";
   } else {
     cancelBtn.classList.add("hidden");
+    cancelBtn.disabled = true;
   }
 
   return node;
@@ -791,6 +801,16 @@ async function patchProgress(hitId, patch) {
   }
 
   render(currentData);
+}
+
+function isDownloadCancellable(hit, progress) {
+  if (!hit || hit.status !== "running") return false;
+  if (progress?.cancelling) return true;
+  return !!(
+    progress?.serverDownloadId ||
+    progress?.chromeDownloadId ||
+    hit.serverDownloadId
+  );
 }
 
 function filterYouTubeFallbackHitsForDisplay(hits) {

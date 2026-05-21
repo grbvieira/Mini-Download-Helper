@@ -24,6 +24,7 @@ const store = {
   logs: [],
   directDownloadMap: {}
 };
+const cancellingHitIds = new Set();
 
 const defaultSettings = {
   detectHls: true,
@@ -751,6 +752,23 @@ async function cancelDownload(hit) {
   const directEntry = Object.entries(store.directDownloadMap)
     .find(([, entry]) => entry?.hitId === hit.id);
 
+  if (cancellingHitIds.has(hit.id) || progress.cancelling) {
+    return { ok: true, alreadyCancelling: true };
+  }
+
+  if (hit.status !== "running" || (!serverDownloadId && !directEntry)) {
+    return { ok: false, error: "Nenhum download em andamento para cancelar" };
+  }
+
+  cancellingHitIds.add(hit.id);
+  setProgress(hit.id, {
+    ...progress,
+    text: "Cancelando...",
+    cancelling: true,
+    serverDownloadId: serverDownloadId || null
+  });
+  notifyPopup();
+
   try {
     if (serverDownloadId) {
       const response = await fetch(`${SERVER_BASE}/cancel-download`, {
@@ -777,17 +795,22 @@ async function cancelDownload(hit) {
     setProgress(hit.id, {
       percent: 0,
       text: "Cancelado",
-      serverDownloadId: null
+      serverDownloadId: null,
+      chromeDownloadId: null,
+      cancelling: false
     });
     addLog("info", `Download cancelado: ${hit.title}`);
+    cancellingHitIds.delete(hit.id);
     schedulePersist();
     notifyPopup();
     return { ok: true };
   } catch (error) {
+    cancellingHitIds.delete(hit.id);
     setProgress(hit.id, {
       percent: progress.percent || 0,
       text: `Erro ao cancelar: ${error.message}`,
-      serverDownloadId: serverDownloadId || null
+      serverDownloadId: serverDownloadId || null,
+      cancelling: false
     });
     schedulePersist();
     notifyPopup();
