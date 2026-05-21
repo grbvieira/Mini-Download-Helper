@@ -283,6 +283,14 @@ function buildDisplayFamilyKey(hit) {
   return [host, pagePath, title || fileKey || thumbKey].filter(Boolean).join("::");
 }
 
+function buildSelectionKey(hit) {
+  const host = safeHost(hit?.page_url || hit?.url);
+  const pagePath = normalizePagePath(hit?.page_url || hit?.url);
+  const title = normalizeLoose(hit?.title);
+  const filename = normalizeLoose(filenameStem(hit?.filename || filenameFromUrl(hit?.url || "")));
+  return [host, pagePath, title || filename || hit?.primaryHitId || hit?.id].filter(Boolean).join("::");
+}
+
 function mergeDisplayHits(target, source) {
   target.title = preferLonger(target.title, source.title);
   target.thumbnail = chooseBetterThumbnail(target.thumbnail, source.thumbnail);
@@ -513,6 +521,7 @@ function pickDisplayProgress(hit, progressMap) {
 function renderItem(hit, progress) {
   const node = itemTemplate.content.firstElementChild.cloneNode(true);
   const cancellable = isDownloadCancellable(hit, progress);
+  const selectionKey = buildSelectionKey(hit);
 
   const thumb = node.querySelector(".thumb");
   thumb.src = hit.thumbnail || createPlaceholderThumb(hit.type);
@@ -551,23 +560,23 @@ function renderItem(hit, progress) {
     }
   }
 
-  if (userSelections.has(hit.id)) {
-    const savedVal = userSelections.get(hit.id);
+  if (userSelections.has(selectionKey)) {
+    const savedVal = userSelections.get(selectionKey);
     if (Array.from(select.options).some(opt => opt.value === savedVal)) {
       select.value = savedVal;
     }
   }
 
   select.addEventListener("change", () => {
-    userSelections.set(hit.id, select.value);
+    userSelections.set(selectionKey, select.value);
   });
 
   const rotationSelect = node.querySelector(".rotation-select");
-  if (rotationSelections.has(hit.id)) {
-    rotationSelect.value = rotationSelections.get(hit.id);
+  if (rotationSelections.has(selectionKey)) {
+    rotationSelect.value = rotationSelections.get(selectionKey);
   }
   rotationSelect.addEventListener("change", () => {
-    rotationSelections.set(hit.id, rotationSelect.value);
+    rotationSelections.set(selectionKey, rotationSelect.value);
   });
 
   const progressRow = node.querySelector(".progress-row");
@@ -590,14 +599,14 @@ function renderItem(hit, progress) {
   const forgetBtn = node.querySelector(".forget-btn");
 
   downloadBtn.addEventListener("click", async () => {
-    userSelections.set(hit.id, select.value);
-    rotationSelections.set(hit.id, rotationSelect.value);
+    userSelections.set(selectionKey, select.value);
+    rotationSelections.set(selectionKey, rotationSelect.value);
     await runDisplayAction("download", hit, select.value, true, rotationSelect.value);
   });
 
   downloadAsBtn.addEventListener("click", async () => {
-    userSelections.set(hit.id, select.value);
-    rotationSelections.set(hit.id, rotationSelect.value);
+    userSelections.set(selectionKey, select.value);
+    rotationSelections.set(selectionKey, rotationSelect.value);
     await runDisplayAction("download_as", hit, select.value, true, rotationSelect.value);
   });
 

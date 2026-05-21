@@ -306,6 +306,12 @@ main {
   box-shadow: 0 0 0 3px rgba(74, 140, 255, 0.13);
 }
 
+.rotation-select:disabled {
+  opacity: 1;
+  background: var(--field);
+  color: var(--text);
+}
+
 .progress-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
