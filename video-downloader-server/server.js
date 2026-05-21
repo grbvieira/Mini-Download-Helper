@@ -14,6 +14,7 @@ const DOWNLOAD_DIR = path.join(__dirname, 'downloads');
 const THUMB_DIR = path.join(__dirname, 'thumbs');
 const THUMB_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const THUMB_CACHE_CLEAN_INTERVAL_MS = 60 * 60 * 1000;
+const DEFAULT_HTTP_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
 const activeDownloads = new Map();
 
 ensureDirs();
@@ -173,6 +174,11 @@ function sendError(downloadId, msg) {
 function finalizeDownload(downloadId, finalPath) {
   try {
     const stats = fs.statSync(finalPath);
+    if (!stats.size) {
+      deleteIfExists(finalPath);
+      return sendError(downloadId, 'Arquivo final foi criado vazio. O servidor de origem pode ter bloqueado a playlist ou os segmentos.');
+    }
+
     console.log(`Sucesso [${downloadId}]: ${(stats.size / 1024 / 1024).toFixed(2)} MB`);
 
     sendWs(downloadId, {
@@ -202,17 +208,47 @@ function parseFfmpegTimeToSeconds(timeStr) {
   return (Number(hh) * 3600) + (Number(mm) * 60) + Number(ss);
 }
 
-async function getDurationSeconds(inputPathOrUrl, headers = []) {
+function buildFfmpegHttpInputArgs(headerArgs = []) {
+  return [
+    '-reconnect', '1',
+    '-reconnect_streamed', '1',
+    '-reconnect_on_network_error', '1',
+    '-reconnect_delay_max', '10',
+    '-rw_timeout', '15000000',
+    '-protocol_whitelist', 'file,http,https,tcp,tls,crypto',
+    '-allowed_extensions', 'ALL',
+    '-user_agent', DEFAULT_HTTP_USER_AGENT,
+    ...headerArgs
+  ];
+}
+
+function formatFfmpegError(stderrLog) {
+  const lines = String(stderrLog || '')
+    .replace(/\r/g, '\n')
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean);
+
+  if (!lines.length) {
+    return 'FFmpeg finalizou sem informar detalhes.';
+  }
+
+  const important = lines.filter(line =>
+    /error|failed|invalid|forbidden|unauthorized|not found|http|403|404|timed out|opening|unable/i.test(line)
+  );
+
+  const selected = (important.length ? important : lines).slice(-6);
+  return selected.join(' | ').slice(0, 900);
+}
+
+async function getDurationSeconds(inputPathOrUrl, headerArgs = []) {
   try {
     const args = [
       '-v', 'error',
+      ...buildFfmpegHttpInputArgs(headerArgs),
       '-show_entries', 'format=duration',
       '-of', 'default=noprint_wrappers=1:nokey=1'
     ];
-
-    for (const h of headers) {
-      args.push('-headers', h);
-    }
 
     args.push(inputPathOrUrl);
 
@@ -249,7 +285,7 @@ function buildHeaderArgs(referer = 'https://example.com', extraHeaders = {}) {
   const merged = {
     Referer: referer,
     Origin: origin,
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    'User-Agent': DEFAULT_HTTP_USER_AGENT,
     ...extraHeaders
   };
 
@@ -654,13 +690,19 @@ app.post('/download-stream', async (req, res) => {
   res.json({ success: true, downloadId });
 
   const headerArgs = buildHeaderArgs(referer, headers);
-  const duration = await getDurationSeconds(url, headerArgs.length ? [headerArgs[1]] : []);
+  const duration = await getDurationSeconds(url, headerArgs);
 
   const ffmpegArgs = [
-    ...headerArgs,
+    '-hide_banner',
+    '-loglevel', 'warning',
+    '-nostdin',
     '-y',
+    ...buildFfmpegHttpInputArgs(headerArgs),
     '-i', url,
+    '-map', '0:v:0?',
+    '-map', '0:a:0?',
     '-c', 'copy',
+    '-movflags', '+faststart',
     '-bsf:a', 'aac_adtstoasc',
     finalPath
   ];
@@ -705,7 +747,7 @@ app.post('/download-stream', async (req, res) => {
     if (wasCancelled(downloadId)) return;
 
     if (code !== 0) {
-      return sendError(downloadId, `FFmpeg falhou: ${stderrLog.slice(-400)}`);
+      return sendError(downloadId, `FFmpeg falhou: ${formatFfmpegError(stderrLog)}`);
     }
 
     if (!fs.existsSync(finalPath)) {
