@@ -241,92 +241,6 @@ function formatFfmpegError(stderrLog) {
   return selected.join(' | ').slice(0, 900);
 }
 
-function numberFromUnknown(value) {
-  const parsed = Number.parseFloat(String(value ?? '').replace(',', '.'));
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function normalizeRotation(value) {
-  const numeric = numberFromUnknown(value);
-  if (!Number.isFinite(numeric)) return 0;
-
-  const normalized = Math.round(numeric) % 360;
-  return normalized < 0 ? normalized + 360 : normalized;
-}
-
-function rotationFromDisplayMatrix(value) {
-  const match = String(value || '').match(/rotation\s+of\s+(-?\d+(?:\.\d+)?)\s+degrees/i);
-  return match ? normalizeRotation(match[1]) : 0;
-}
-
-function readVideoRotation(stream = {}) {
-  const tagRotation = normalizeRotation(stream.tags?.rotate);
-  if (tagRotation) return tagRotation;
-
-  for (const sideData of stream.side_data_list || []) {
-    const directRotation = normalizeRotation(sideData.rotation);
-    if (directRotation) return directRotation;
-
-    const matrixRotation = rotationFromDisplayMatrix(sideData.displaymatrix);
-    if (matrixRotation) return matrixRotation;
-  }
-
-  return 0;
-}
-
-function buildOrientationInfo(probeInfo = {}) {
-  const video = (probeInfo.streams || []).find(stream => stream.codec_type === 'video') || null;
-  if (!video) {
-    return {
-      hasVideo: false,
-      width: null,
-      height: null,
-      rotation: 0,
-      displayWidth: null,
-      displayHeight: null,
-      isSidewaysVertical: false
-    };
-  }
-
-  const width = Number.isFinite(video.width) ? video.width : null;
-  const height = Number.isFinite(video.height) ? video.height : null;
-  const rotation = readVideoRotation(video);
-  const rotatedQuarterTurn = rotation === 90 || rotation === 270;
-  const displayWidth = rotatedQuarterTurn ? height : width;
-  const displayHeight = rotatedQuarterTurn ? width : height;
-
-  return {
-    hasVideo: true,
-    width,
-    height,
-    rotation,
-    displayWidth: displayWidth || null,
-    displayHeight: displayHeight || null,
-    isSidewaysVertical: !!(rotatedQuarterTurn && width && height && width > height),
-    note: rotatedQuarterTurn
-      ? 'Video stream has quarter-turn rotation metadata.'
-      : ''
-  };
-}
-
-async function probeOrientation(url, headerArgs = []) {
-  const args = [
-    '-v', 'error',
-    ...buildFfmpegHttpInputArgs(headerArgs),
-    '-show_streams',
-    '-show_format',
-    '-print_format', 'json',
-    url
-  ];
-
-  const { stdout } = await runCommand('ffprobe', args, {
-    timeout: 30000,
-    maxBuffer: 1024 * 1024 * 4
-  });
-
-  return buildOrientationInfo(JSON.parse(stdout || '{}'));
-}
-
 async function getDurationSeconds(inputPathOrUrl, headerArgs = []) {
   try {
     const args = [
@@ -560,30 +474,6 @@ app.post('/clear-thumbs', (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Falha ao limpar cache de thumbnails',
-      details: error.message
-    });
-  }
-});
-
-app.post('/probe-orientation', async (req, res) => {
-  const {
-    url,
-    referer = 'https://example.com',
-    headers = {}
-  } = req.body;
-
-  if (!url) {
-    return res.status(400).json({ success: false, error: 'URL obrigatoria' });
-  }
-
-  try {
-    const headerArgs = buildHeaderArgs(referer, headers);
-    const orientation = await probeOrientation(url, headerArgs);
-    res.json({ success: true, orientation });
-  } catch (error) {
-    res.json({
-      success: false,
-      error: 'Falha ao analisar orientacao do video',
       details: error.message
     });
   }

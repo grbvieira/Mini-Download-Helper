@@ -288,7 +288,6 @@ function mergeDisplayHits(target, source) {
   target.page_url = target.page_url || source.page_url;
   target.filename = chooseBetterFilename(target.filename, source.filename);
   target.duration = target.duration || source.duration;
-  target.orientation = chooseBetterOrientation(target.orientation, source.orientation);
   target.lastSeenAt = Math.max(target.lastSeenAt || 0, source.lastSeenAt || 0);
   target.displaySourceHitIds = uniqueArray([...(target.displaySourceHitIds || []), source.id]);
   target.pinned = !!target.pinned || !!source.pinned;
@@ -387,11 +386,6 @@ function chooseBetterFilename(a, b) {
   if (ax.endsWith(".mp4") && !bx.endsWith(".mp4")) return a;
   if (bx.endsWith(".mp4") && !ax.endsWith(".mp4")) return b;
   return preferLonger(a, b);
-}
-
-function chooseBetterOrientation(current, next) {
-  if (next?.isSidewaysVertical && !current?.isSidewaysVertical) return next;
-  return current || next || null;
 }
 
 function isPlaceholderThumb(url) {
@@ -535,7 +529,6 @@ function renderItem(hit, progress) {
 
   node.querySelector(".item-type").textContent = prettyType(hit.type);
   node.querySelector(".item-file").textContent = buildItemInfo(hit);
-  renderOrientationAlert(node, hit);
 
   const select = node.querySelector(".variant-select");
   const variants = getSortedVariants(hit);
@@ -1133,33 +1126,6 @@ function buildItemInfo(hit) {
   if (duration) bits.push(duration);
   if (hit.filename) bits.push(hit.filename);
   return bits.join(" • ") || "sem nome";
-}
-
-function renderOrientationAlert(node, hit) {
-  const alert = node.querySelector(".orientation-alert");
-  if (!alert) return;
-
-  const orientation = hit?.orientation;
-  if (!orientation?.isSidewaysVertical) {
-    alert.classList.add("hidden");
-    alert.textContent = "";
-    return;
-  }
-
-  const rotation = Number.isFinite(orientation.rotation) ? `${orientation.rotation} graus` : "90 graus";
-  const storedSize = orientation.width && orientation.height
-    ? `${orientation.width}x${orientation.height}`
-    : "";
-  const displaySize = orientation.displayWidth && orientation.displayHeight
-    ? `exibicao ${orientation.displayWidth}x${orientation.displayHeight}`
-    : "";
-  const details = [storedSize, displaySize].filter(Boolean).join(" • ");
-
-  alert.textContent = [
-    `Possivel video vertical girado (${rotation})`,
-    details
-  ].filter(Boolean).join(" - ");
-  alert.classList.remove("hidden");
 }
 
 function filenameFromUrl(url) {
