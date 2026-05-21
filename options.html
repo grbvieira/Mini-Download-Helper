@@ -1,881 +1,426 @@
-<!DOCTYPE html>
-<html>
+<!doctype html>
+<html lang="pt-BR">
 <head>
-    <meta charset="UTF-8">
-    <title>Configurações - Video Downloader Pro</title>
-    <style>
-        :root {
-            --primary: #2563eb;
-            --secondary: #64748b;
-            --success: #10b981;
-            --warning: #f59e0b;
-            --error: #ef4444;
-            --bg-primary: #0f172a;
-            --bg-secondary: #1e293b;
-            --bg-tertiary: #334155;
-            --text-primary: #f8fafc;
-            --text-secondary: #cbd5e1;
-            --border: #475569;
-        }
-        
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
-        body {
-            background: var(--bg-primary);
-            color: var(--text-primary);
-            font-family: 'Segoe UI', system-ui, sans-serif;
-            line-height: 1.6;
-            min-height: 100vh;
-        }
-        
-        .settings-container {
-            max-width: 1000px;
-            margin: 0 auto;
-            padding: 20px;
-        }
-        
-        /* Header */
-        .header {
-            background: var(--bg-secondary);
-            padding: 20px;
-            border-radius: 12px;
-            margin-bottom: 24px;
-            border: 1px solid var(--border);
-        }
-        
-        .header-content {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-        }
-        
-        .logo {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-        
-        .logo h1 {
-            font-size: 24px;
-            font-weight: 700;
-        }
-        
-        .version {
-            color: var(--text-secondary);
-            font-size: 14px;
-        }
-        
-        /* Navigation */
-        .nav-tabs {
-            display: flex;
-            background: var(--bg-tertiary);
-            border-radius: 8px;
-            padding: 4px;
-            margin-bottom: 24px;
-        }
-        
-        .nav-tab {
-            flex: 1;
-            padding: 12px 16px;
-            text-align: center;
-            background: transparent;
-            border: none;
-            color: var(--text-secondary);
-            font-weight: 500;
-            cursor: pointer;
-            border-radius: 6px;
-            transition: all 0.2s;
-        }
-        
-        .nav-tab.active {
-            background: var(--primary);
-            color: white;
-        }
-        
-        .nav-tab:hover:not(.active) {
-            background: var(--bg-secondary);
-            color: var(--text-primary);
-        }
-        
-        /* Content Areas */
-        .tab-content {
-            display: none;
-        }
-        
-        .tab-content.active {
-            display: block;
-        }
-        
-        /* Cards */
-        .settings-card {
-            background: var(--bg-secondary);
-            border-radius: 12px;
-            padding: 24px;
-            margin-bottom: 20px;
-            border: 1px solid var(--border);
-        }
-        
-        .card-header {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            margin-bottom: 20px;
-            padding-bottom: 16px;
-            border-bottom: 1px solid var(--border);
-        }
-        
-        .card-icon {
-            font-size: 20px;
-        }
-        
-        .card-title {
-            font-size: 18px;
-            font-weight: 600;
-        }
-        
-        .card-description {
-            color: var(--text-secondary);
-            font-size: 14px;
-            margin-top: 4px;
-        }
-        
-        /* Form Elements */
-        .form-group {
-            margin-bottom: 20px;
-        }
-        
-        .form-row {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 16px;
-            margin-bottom: 16px;
-        }
-        
-        .form-label {
-            display: block;
-            margin-bottom: 8px;
-            font-weight: 500;
-            color: var(--text-primary);
-        }
-        
-        .form-hint {
-            font-size: 12px;
-            color: var(--text-secondary);
-            margin-top: 4px;
-        }
-        
-        .input, .select, .textarea {
-            width: 100%;
-            padding: 12px 16px;
-            background: var(--bg-tertiary);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            color: var(--text-primary);
-            font-size: 14px;
-            transition: all 0.2s;
-        }
-        
-        .input:focus, .select:focus, .textarea:focus {
-            outline: none;
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
-        }
-        
-        .textarea {
-            resize: vertical;
-            min-height: 80px;
-            font-family: inherit;
-        }
-        
-        /* Checkbox and Radio */
-        .checkbox-group, .radio-group {
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-        }
-        
-        .checkbox-item, .radio-item {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            padding: 12px;
-            background: var(--bg-tertiary);
-            border-radius: 8px;
-            border: 1px solid var(--border);
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-        
-        .checkbox-item:hover, .radio-item:hover {
-            border-color: var(--primary);
-        }
-        
-        .checkbox-item input, .radio-item input {
-            margin: 0;
-        }
-        
-        .checkbox-label, .radio-label {
-            flex: 1;
-            font-weight: 500;
-        }
-        
-        .checkbox-description, .radio-description {
-            font-size: 12px;
-            color: var(--text-secondary);
-            margin-top: 2px;
-        }
-        
-        /* Buttons */
-        .btn {
-            padding: 12px 24px;
-            border: none;
-            border-radius: 8px;
-            font-size: 14px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.2s;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-        }
-        
-        .btn-primary {
-            background: var(--primary);
-            color: white;
-        }
-        
-        .btn-primary:hover {
-            background: #1d4ed8;
-            transform: translateY(-1px);
-        }
-        
-        .btn-secondary {
-            background: var(--bg-tertiary);
-            color: var(--text-primary);
-            border: 1px solid var(--border);
-        }
-        
-        .btn-secondary:hover {
-            background: var(--border);
-        }
-        
-        .btn-success {
-            background: var(--success);
-            color: white;
-        }
-        
-        .btn-success:hover {
-            background: #059669;
-        }
-        
-        .btn-warning {
-            background: var(--warning);
-            color: white;
-        }
-        
-        .btn-warning:hover {
-            background: #d97706;
-        }
-        
-        .btn-danger {
-            background: var(--error);
-            color: white;
-        }
-        
-        .btn-danger:hover {
-            background: #dc2626;
-        }
-        
-        .btn:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-            transform: none;
-        }
-        
-        /* Actions */
-        .actions {
-            display: flex;
-            gap: 12px;
-            margin-top: 24px;
-            padding-top: 20px;
-            border-top: 1px solid var(--border);
-        }
-        
-        /* Status */
-        .status {
-            padding: 12px 16px;
-            border-radius: 8px;
-            margin-bottom: 16px;
-            font-size: 14px;
-        }
-        
-        .status.success {
-            background: rgba(16, 185, 129, 0.1);
-            border: 1px solid var(--success);
-            color: var(--success);
-        }
-        
-        .status.error {
-            background: rgba(239, 68, 68, 0.1);
-            border: 1px solid var(--error);
-            color: var(--error);
-        }
-        
-        .status.warning {
-            background: rgba(245, 158, 11, 0.1);
-            border: 1px solid var(--warning);
-            color: var(--warning);
-        }
-        
-        .status.info {
-            background: rgba(37, 99, 235, 0.1);
-            border: 1px solid var(--primary);
-            color: var(--primary);
-        }
-        
-        /* Progress */
-        .progress-bar {
-            width: 100%;
-            height: 6px;
-            background: var(--bg-tertiary);
-            border-radius: 3px;
-            overflow: hidden;
-            margin: 8px 0;
-        }
-        
-        .progress-fill {
-            height: 100%;
-            background: var(--primary);
-            transition: width 0.3s;
-        }
-        
-        /* Table */
-        .table {
-            width: 100%;
-            border-collapse: collapse;
-            background: var(--bg-tertiary);
-            border-radius: 8px;
-            overflow: hidden;
-        }
-        
-        .table th, .table td {
-            padding: 12px 16px;
-            text-align: left;
-            border-bottom: 1px solid var(--border);
-        }
-        
-        .table th {
-            background: var(--bg-secondary);
-            font-weight: 600;
-            color: var(--text-primary);
-        }
-        
-        .table td {
-            color: var(--text-secondary);
-        }
-        
-        .table tr:last-child td {
-            border-bottom: none;
-        }
-        
-        /* Badges */
-        .badge {
-            padding: 4px 8px;
-            border-radius: 12px;
-            font-size: 11px;
-            font-weight: 600;
-        }
-        
-        .badge.success {
-            background: var(--success);
-            color: white;
-        }
-        
-        .badge.warning {
-            background: var(--warning);
-            color: white;
-        }
-        
-        .badge.error {
-            background: var(--error);
-            color: white;
-        }
-        
-        .badge.info {
-            background: var(--primary);
-            color: white;
-        }
-        
-        /* Utilities */
-        .hidden {
-            display: none;
-        }
-        
-        .text-center {
-            text-align: center;
-        }
-        
-        .mt-4 {
-            margin-top: 16px;
-        }
-        
-        .mb-4 {
-            margin-bottom: 16px;
-        }
-        
-        .p-4 {
-            padding: 16px;
-        }
-    </style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Configurações - Mini Download Helper</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0d1117;
+      --panel: #141a22;
+      --panel-2: #10161e;
+      --field: #0f151d;
+      --text: #edf2f8;
+      --muted: #9aa7b7;
+      --border: #273241;
+      --border-strong: #35465a;
+      --primary: #4a8cff;
+      --primary-hover: #66a0ff;
+      --success: #35c982;
+      --danger: #ff667c;
+      --warning: #f0b456;
+      --radius: 8px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-width: 760px;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.45 Inter, "Segoe UI", Arial, sans-serif;
+    }
+
+    button,
+    input,
+    select {
+      font: inherit;
+    }
+
+    .shell {
+      width: min(1080px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 24px 0 36px;
+    }
+
+    .topbar {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 16px;
+      align-items: center;
+      padding: 18px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--panel);
+    }
+
+    .brand {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      min-width: 0;
+    }
+
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 42px;
+      height: 42px;
+      border: 1px solid rgba(74, 140, 255, 0.38);
+      border-radius: var(--radius);
+      background: #14243a;
+      color: #cfe0ff;
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 20px;
+      line-height: 1.2;
+    }
+
+    .subtitle {
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .top-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1.08fr 0.92fr;
+      gap: 16px;
+      margin-top: 16px;
+    }
+
+    .stack {
+      display: grid;
+      gap: 16px;
+    }
+
+    .card {
+      padding: 18px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--panel);
+    }
+
+    .card h2 {
+      margin: 0;
+      font-size: 16px;
+    }
+
+    .card-desc {
+      margin: 4px 0 16px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .field {
+      display: grid;
+      gap: 7px;
+      margin-top: 14px;
+    }
+
+    .field:first-of-type {
+      margin-top: 0;
+    }
+
+    label,
+    .label {
+      color: var(--text);
+      font-weight: 700;
+    }
+
+    .hint {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    input[type="text"],
+    select {
+      width: 100%;
+      height: 38px;
+      padding: 0 11px;
+      border: 1px solid var(--border-strong);
+      border-radius: 6px;
+      outline: none;
+      background: var(--field);
+      color: var(--text);
+    }
+
+    input[type="text"]:focus,
+    select:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(74, 140, 255, 0.14);
+    }
+
+    .check-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .check-item {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 10px;
+      align-items: start;
+      padding: 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--panel-2);
+    }
+
+    .check-item input {
+      margin-top: 3px;
+    }
+
+    .check-title {
+      font-weight: 750;
+    }
+
+    .check-desc {
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    button {
+      min-width: 0;
+      height: 38px;
+      padding: 0 13px;
+      border: 1px solid var(--border-strong);
+      border-radius: 6px;
+      background: #111924;
+      color: var(--text);
+      cursor: pointer;
+      font-weight: 750;
+    }
+
+    button:hover {
+      border-color: var(--primary);
+      background: #162235;
+    }
+
+    .primary {
+      border-color: #5c97ff;
+      background: var(--primary);
+      color: white;
+    }
+
+    .primary:hover {
+      background: var(--primary-hover);
+    }
+
+    .danger {
+      border-color: rgba(255, 102, 124, 0.45);
+      background: rgba(255, 102, 124, 0.13);
+      color: #ffd9df;
+    }
+
+    .status,
+    .notice {
+      padding: 11px 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--panel-2);
+      color: var(--muted);
+    }
+
+    .status.success,
+    .notice.success {
+      border-color: rgba(53, 201, 130, 0.45);
+      color: #abf4d1;
+    }
+
+    .status.error,
+    .notice.error {
+      border-color: rgba(255, 102, 124, 0.45);
+      color: #ffd9df;
+    }
+
+    .notice.info {
+      border-color: rgba(74, 140, 255, 0.45);
+      color: #cfe0ff;
+    }
+
+    .tool-status {
+      display: grid;
+      gap: 8px;
+    }
+
+    .tool-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--panel-2);
+    }
+
+    .ok {
+      color: var(--success);
+    }
+
+    .fail {
+      color: var(--danger);
+    }
+
+    .button-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 14px;
+    }
+
+    .callout {
+      border-color: rgba(240, 180, 86, 0.35);
+      background: rgba(240, 180, 86, 0.08);
+    }
+
+    @media (max-width: 820px) {
+      body {
+        min-width: 0;
+      }
+
+      .shell {
+        width: min(100vw - 20px, 680px);
+        padding-top: 10px;
+      }
+
+      .topbar,
+      .grid {
+        grid-template-columns: 1fr;
+      }
+
+      .top-actions {
+        justify-content: stretch;
+      }
+
+      .top-actions button {
+        flex: 1;
+      }
+    }
+  </style>
 </head>
 <body>
-    <div class="settings-container">
-        <!-- Header -->
-        <div class="header">
-            <div class="header-content">
-                <div class="logo">
-                    <h1>⚙️ Video Downloader Pro</h1>
-                    <span class="version">v2.0.0</span>
-                </div>
-                <div class="actions">
-                    <button class="btn btn-secondary" id="backBtn">← Voltar</button>
-                    <button class="btn btn-primary" id="saveBtn">💾 Salvar Configurações</button>
-                </div>
-            </div>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">MDH</div>
+        <div>
+          <h1>Configurações</h1>
+          <div class="subtitle">Mini Download Helper</div>
         </div>
+      </div>
+      <div class="top-actions">
+        <button id="backBtn" type="button">Voltar</button>
+        <button id="saveBtn" class="primary" type="button">Salvar</button>
+      </div>
+    </header>
 
-        <!-- Navigation Tabs -->
-        <div class="nav-tabs">
-            <button class="nav-tab active" data-tab="general">🌐 Geral</button>
-            <button class="nav-tab" data-tab="download">⬇️ Download</button>
-            <button class="nav-tab" data-tab="integration">🔗 Integração</button>
-            <button class="nav-tab" data-tab="advanced">⚡ Avançado</button>
-            <button class="nav-tab" data-tab="about">ℹ️ Sobre</button>
-        </div>
+    <main class="grid">
+      <section class="stack">
+        <div id="statusMessage" class="status" hidden></div>
 
-        <!-- Status Messages -->
-        <div id="statusMessage" class="status hidden"></div>
+        <article class="card">
+          <h2>Detecção</h2>
+          <p class="card-desc">Essas opções controlam exatamente o que o service worker procura nas páginas abertas.</p>
 
-        <!-- General Settings -->
-        <div class="tab-content active" id="general-tab">
-            <div class="settings-card">
-                <div class="card-header">
-                    <div class="card-icon">🎯</div>
-                    <div>
-                        <div class="card-title">Detecção de Vídeos</div>
-                        <div class="card-description">Configure como os vídeos são detectados automaticamente</div>
-                    </div>
-                </div>
-                
-                <div class="form-group">
-                    <label class="form-label">Sites para Detecção Automática</label>
-                    <div class="checkbox-group">
-                        <label class="checkbox-item">
-                            <input type="checkbox" id="detectCloudflare" checked>
-                            <div>
-                                <div class="checkbox-label">Cloudflare Stream</div>
-                                <div class="checkbox-description">Detectar vídeos do Cloudflare Stream automaticamente</div>
-                            </div>
-                        </label>
-                        <label class="checkbox-item">
-                            <input type="checkbox" id="detectHls" checked>
-                            <div>
-                                <div class="checkbox-label">Streams HLS (.m3u8)</div>
-                                <div class="checkbox-description">Detectar streams HLS em qualquer site</div>
-                            </div>
-                        </label>
-                        <label class="checkbox-item">
-                            <input type="checkbox" id="detectNative" checked>
-                            <div>
-                                <div class="checkbox-label">Vídeos Nativos</div>
-                                <div class="checkbox-description">Detectar elementos de vídeo HTML5</div>
-                            </div>
-                        </label>
-                    </div>
-                </div>
+          <div class="check-list">
+            <label class="check-item">
+              <input id="detectHls" type="checkbox">
+              <span>
+                <span class="check-title">Detectar HLS e DASH</span>
+                <span class="check-desc">Inclui playlists `.m3u8`, manifestos `.mpd` e qualidades listadas via yt-dlp quando possível.</span>
+              </span>
+            </label>
 
-                <div class="form-group">
-                    <label class="form-label">Comportamento da Extensão</label>
-                    <div class="checkbox-group">
-                        <label class="checkbox-item">
-                            <input type="checkbox" id="autoDetect">
-                            <div>
-                                <div class="checkbox-label">Detecção Automática</div>
-                                <div class="checkbox-description">Detectar vídeos automaticamente ao abrir a extensão</div>
-                            </div>
-                        </label>
-                        <label class="checkbox-item">
-                            <input type="checkbox" id="showNotifications" checked>
-                            <div>
-                                <div class="checkbox-label">Notificações</div>
-                                <div class="checkbox-description">Mostrar notificações quando vídeos são detectados</div>
-                            </div>
-                        </label>
-                        <label class="checkbox-item">
-                            <input type="checkbox" id="badgeCounter" checked>
-                            <div>
-                                <div class="checkbox-label">Contador no Ícone</div>
-                                <div class="checkbox-description">Mostrar número de vídeos detectados no ícone da extensão</div>
-                            </div>
-                        </label>
-                    </div>
-                </div>
-            </div>
-        </div>
+            <label class="check-item">
+              <input id="detectNative" type="checkbox">
+              <span>
+                <span class="check-title">Detectar mídia direta</span>
+                <span class="check-desc">Inclui arquivos de vídeo/áudio, elementos HTML5 e respostas de rede com MIME de mídia.</span>
+              </span>
+            </label>
+          </div>
+        </article>
 
-        <!-- Download Settings -->
-        <div class="tab-content" id="download-tab">
-            <div class="settings-card">
-                <div class="card-header">
-                    <div class="card-icon">⚡</div>
-                    <div>
-                        <div class="card-title">Configurações de Download</div>
-                        <div class="card-description">Configure o comportamento dos downloads</div>
-                    </div>
-                </div>
+        <article class="card">
+          <h2>Download</h2>
+          <p class="card-desc">Essas configurações são usadas no momento em que você clica em baixar.</p>
 
-                <div class="form-row">
-                    <div class="form-group">
-                        <label class="form-label" for="defaultQuality">Qualidade Padrão</label>
-                        <select class="select" id="defaultQuality">
-                            <option value="best">Melhor Qualidade Disponível</option>
-                            <option value="1080p">1080p Full HD</option>
-                            <option value="720p">720p HD</option>
-                            <option value="480p">480p SD</option>
-                            <option value="360p">360p</option>
-                        </select>
-                    </div>
+          <div class="field">
+            <label for="defaultQuality">Qualidade padrão</label>
+            <select id="defaultQuality">
+              <option value="best">Melhor disponível</option>
+              <option value="2160p">2160p ou menor</option>
+              <option value="1440p">1440p ou menor</option>
+              <option value="1080p">1080p ou menor</option>
+              <option value="720p">720p ou menor</option>
+              <option value="480p">480p ou menor</option>
+              <option value="360p">360p ou menor</option>
+            </select>
+            <div class="hint">Afeta downloads via yt-dlp quando você não escolhe uma variante específica.</div>
+          </div>
 
-                    <div class="form-group">
-                        <label class="form-label" for="defaultFormat">Formato Padrão</label>
-                        <select class="select" id="defaultFormat">
-                            <option value="mp4">MP4 (Recomendado)</option>
-                            <option value="mkv">MKV</option>
-                            <option value="webm">WebM</option>
-                            <option value="avi">AVI</option>
-                        </select>
-                    </div>
-                </div>
+          <div class="field">
+            <label for="downloadPath">Subpasta de download</label>
+            <input id="downloadPath" type="text" placeholder="Ex.: Mini Download Helper/YouTube">
+            <div class="hint">Use um caminho relativo. A extensão salva dentro da pasta de Downloads do Chrome.</div>
+          </div>
 
-                <div class="form-group">
-                    <label class="form-label" for="downloadPath">Pasta de Download</label>
-                    <input type="text" class="input" id="downloadPath" placeholder="Caminho para salvar os vídeos...">
-                    <div class="form-hint">Deixe em branco para usar a pasta padrão de Downloads</div>
-                </div>
+          <div class="field">
+            <label class="check-item">
+              <input id="skipDialog" type="checkbox">
+              <span>
+                <span class="check-title">Baixar sem perguntar onde salvar</span>
+                <span class="check-desc">Quando desligado, o Chrome mostra o diálogo “Salvar como” para downloads diretos.</span>
+              </span>
+            </label>
+          </div>
+        </article>
+      </section>
 
-                <div class="form-group">
-                    <label class="form-label">Comportamento de Download</label>
-                    <div class="checkbox-group">
-                        <label class="checkbox-item">
-                            <input type="checkbox" id="autoDownload">
-                            <div>
-                                <div class="checkbox-label">Download Automático</div>
-                                <div class="checkbox-description">Iniciar download automaticamente quando vídeos são detectados</div>
-                            </div>
-                        </label>
-                        <label class="checkbox-item">
-                            <input type="checkbox" id="skipDialog" checked>
-                            <div>
-                                <div class="checkbox-label">Pular Diálogo de Confirmação</div>
-                                <div class="checkbox-description">Iniciar download imediatamente sem confirmação</div>
-                            </div>
-                        </label>
-                        <label class="checkbox-item">
-                            <input type="checkbox" id="organizeFiles" checked>
-                            <div>
-                                <div class="checkbox-label">Organizar Arquivos</div>
-                                <div class="checkbox-description">Criar pastas por data e site de origem</div>
-                            </div>
-                        </label>
-                    </div>
-                </div>
-            </div>
+      <aside class="stack">
+        <article class="card">
+          <h2>Servidor local</h2>
+          <p class="card-desc">O servidor precisa estar rodando para YouTube, HLS/DASH, thumbnails e conversões.</p>
+          <div id="toolStatus" class="tool-status"></div>
+          <div class="button-row">
+            <button id="testToolsBtn" type="button">Verificar ferramentas</button>
+          </div>
+        </article>
 
-            <div class="settings-card">
-                <div class="card-header">
-                    <div class="card-icon">📊</div>
-                    <div>
-                        <div class="card-title">Limites e Performance</div>
-                        <div class="card-description">Configure limites para otimizar performance</div>
-                    </div>
-                </div>
+        <article class="card">
+          <h2>Manutenção</h2>
+          <p class="card-desc">Ações que afetam dados temporários salvos pela extensão ou pelo servidor local.</p>
+          <div class="button-row">
+            <button id="clearThumbsBtn" type="button">Limpar thumbnails</button>
+            <button id="clearQueueBtn" class="danger" type="button">Limpar fila</button>
+            <button id="resetBtn" class="danger" type="button">Restaurar padrões</button>
+          </div>
+        </article>
 
-                <div class="form-row">
-                    <div class="form-group">
-                        <label class="form-label" for="maxConcurrentDownloads">Downloads Simultâneos</label>
-                        <select class="select" id="maxConcurrentDownloads">
-                            <option value="1">1 Download</option>
-                            <option value="2">2 Downloads</option>
-                            <option value="3">3 Downloads</option>
-                            <option value="5">5 Downloads</option>
-                        </select>
-                    </div>
+        <article class="card callout">
+          <h2>Uso educacional</h2>
+          <p class="card-desc">Este projeto é apenas para estudo. Baixe somente conteúdos que você tem direito de acessar e armazenar.</p>
+        </article>
+      </aside>
+    </main>
+  </div>
 
-                    <div class="form-group">
-                        <label class="form-label" for="maxFileSize">Tamanho Máximo (GB)</label>
-                        <select class="select" id="maxFileSize">
-                            <option value="0">Sem limite</option>
-                            <option value="1">1 GB</option>
-                            <option value="2">2 GB</option>
-                            <option value="5">5 GB</option>
-                            <option value="10">10 GB</option>
-                        </select>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Integration Settings -->
-        <div class="tab-content" id="integration-tab">
-            <div class="settings-card">
-                <div class="card-header">
-                    <div class="card-icon">🔧</div>
-                    <div>
-                        <div class="card-title">Integração com yt-dlp</div>
-                        <div class="card-description">Configure o yt-dlp para downloads avançados</div>
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label" for="ytDlpPath">Caminho do yt-dlp</label>
-                    <div class="form-row">
-                        <input type="text" class="input" id="ytDlpPath" placeholder="Caminho para yt-dlp.exe...">
-                        <button class="btn btn-secondary" id="browseYtDlp">Procurar...</button>
-                    </div>
-                    <div class="form-hint">O yt-dlp é necessário para downloads em alta qualidade e conversão</div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label" for="ffmpegPath">Caminho do FFmpeg</label>
-                    <div class="form-row">
-                        <input type="text" class="input" id="ffmpegPath" placeholder="Caminho para ffmpeg.exe...">
-                        <button class="btn btn-secondary" id="browseFfmpeg">Procurar...</button>
-                    </div>
-                    <div class="form-hint">FFmpeg é necessário para conversão de formatos e processamento de áudio</div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label">Status da Integração</label>
-                    <div id="integrationStatus" class="status info">
-                        <div>🔍 Verificando status das ferramentas...</div>
-                    </div>
-                    <div class="actions">
-                        <button class="btn btn-primary" id="testIntegration">🧪 Testar Integração</button>
-                        <button class="btn btn-warning" id="installTools">📥 Instalar Ferramentas</button>
-                    </div>
-                </div>
-            </div>
-
-            <div class="settings-card">
-                <div class="card-header">
-                    <div class="card-icon">⚙️</div>
-                    <div>
-                        <div class="card-title">Opções Avançadas do yt-dlp</div>
-                        <div class="card-description">Configurações avançadas para usuários experientes</div>
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label" for="additionalArgs">Argumentos Adicionais</label>
-                    <input type="text" class="input" id="additionalArgs" placeholder="--add-header 'Referer: ...'">
-                    <div class="form-hint">Argumentos adicionais para passar para o yt-dlp</div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label">Configurações de Rede</label>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label class="form-label" for="timeout">Timeout (segundos)</label>
-                            <input type="number" class="input" id="timeout" value="30" min="10" max="300">
-                        </div>
-                        <div class="form-group">
-                            <label class="form-label" for="retries">Tentativas</label>
-                            <input type="number" class="input" id="retries" value="3" min="1" max="10">
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Advanced Settings -->
-        <div class="tab-content" id="advanced-tab">
-            <div class="settings-card">
-                <div class="card-header">
-                    <div class="card-icon">🔒</div>
-                    <div>
-                        <div class="card-title">Privacidade e Segurança</div>
-                        <div class="card-description">Configure as configurações de privacidade</div>
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label">Coleta de Dados</label>
-                    <div class="checkbox-group">
-                        <label class="checkbox-item">
-                            <input type="checkbox" id="anonymousStats" checked>
-                            <div>
-                                <div class="checkbox-label">Estatísticas Anônimas</div>
-                                <div class="checkbox-description">Enviar estatísticas de uso anônimas para melhorar a extensão</div>
-                            </div>
-                        </label>
-                        <label class="checkbox-item">
-                            <input type="checkbox" id="errorReporting" checked>
-                            <div>
-                                <div class="checkbox-label">Relatórios de Erro</div>
-                                <div class="checkbox-description">Enviar relatórios automáticos de erro</div>
-                            </div>
-                        </label>
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label">Cache e Dados</label>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label class="form-label" for="cacheSize">Tamanho do Cache (MB)</label>
-                            <select class="select" id="cacheSize">
-                                <option value="50">50 MB</option>
-                                <option value="100">100 MB</option>
-                                <option value="200">200 MB</option>
-                                <option value="500">500 MB</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label class="form-label" for="historySize">Histórico (itens)</label>
-                            <select class="select" id="historySize">
-                                <option value="50">50 itens</option>
-                                <option value="100">100 itens</option>
-                                <option value="200">200 itens</option>
-                                <option value="500">500 itens</option>
-                            </select>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <div class="settings-card">
-                <div class="card-header">
-                    <div class="card-icon">🛠️</div>
-                    <div>
-                        <div class="card-title">Ferramentas de Desenvolvedor</div>
-                        <div class="card-description">Configurações avançadas para troubleshooting</div>
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label">Modo de Depuração</label>
-                    <div class="checkbox-group">
-                        <label class="checkbox-item">
-                            <input type="checkbox" id="debugMode">
-                            <div>
-                                <div class="checkbox-label">Modo Debug</div>
-                                <div class="checkbox-description">Logs detalhados no console para troubleshooting</div>
-                            </div>
-                        </label>
-                        <label class="checkbox-item">
-                            <input type="checkbox" id="verboseLogging">
-                            <div>
-                                <div class="checkbox-label">Logs Verbosos</div>
-                                <div class="checkbox-description">Registrar todas as operações em arquivo de log</div>
-                            </div>
-                        </label>
-                    </div>
-                </div>
-
-                <div class="actions">
-                    <button class="btn btn-warning" id="exportSettings">📤 Exportar Configurações</button>
-                    <button class="btn btn-warning" id="importSettings">📥 Importar Configurações</button>
-                    <button class="btn btn-danger" id="resetSettings">🔄 Redefinir para Padrão</button>
-                </div>
-            </div>
-        </div>
-
-        <!-- About Tab -->
-        <div class="tab-content" id="about-tab">
-            <div class="settings-card">
-                <div class="card-header">
-                    <div class="card-icon">ℹ️</div>
-                    <div>
-                        <div class="card-title">Sobre o Video Downloader Pro</div>
-                        <div class="card-description">Informações sobre a extensão e suporte</div>
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label class="form-label">Versão</label>
-                            <div class="input">2.0.0</div>
-                        </div>
-                        <div class="form-group">
-                            <label class="form-label">Status</label>
-                            <div class="input"><span class="badge success">Ativo</span></div>
-                        </div>
-                    </div>
-
-                    <div class="form-group">
-                        <label class="form-label">yt-dlp</label>
-                        <div id="ytDlpVersion" class="input">Carregando...</div>
-                    </div>
-
-                    <div class="form-group">
-                        <label class="form-label">FFmpeg</label>
-                        <div id="ffmpegVersion" class="input">Carregando...</div>
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label">Estatísticas</label>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label class="form-label">Vídeos Detectados</label>
-                            <div id="statsDetected" class="input">0</div>
-                        </div>
-                        <div class="form-group">
-                            <label class="form-label">Downloads Concluídos</label>
-                            <div id="statsDownloads" class="input">0</div>
-                        </div>
-                        <div class="form-group">
-                            <label class="form-label">Tempo de Atividade</label>
-                            <div id="statsUptime" class="input">0h 0m</div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <div class="settings-card">
-                <div class="card-header">
-                    <div class="card-icon">📚</div>
-                    <div>
-                        <div class="card-title">Recursos e Suporte</div>
-                        <div class="card-description">Links úteis e suporte ao usuário</div>
-                    </div>
-                </div>
-
-                <div class="actions">
-                    <button class="btn btn-secondary" id="documentationBtn">📖 Documentação</button>
-                    <button class="btn btn-secondary" id="reportIssueBtn">🐛 Reportar Problema</button>
-                    <button class="btn btn-secondary" id="featureRequestBtn">💡 Sugerir Melhoria</button>
-                    <button class="btn btn-primary" id="websiteBtn">🌐 Site Oficial</button>
-                </div>
-
-                <div class="form-group mt-4">
-                    <label class="form-label">Créditos</label>
-                    <div class="form-hint">
-                        Video Downloader Pro utiliza:<br>
-                        • yt-dlp: Ferramenta de download de vídeos<br>
-                        • FFmpeg: Processamento de mídia<br>
-                        • Cloudflare Stream API: Detecção de streams
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <script src="options.js"></script>
+  <script src="options.js"></script>
 </body>
 </html>

@@ -1013,12 +1013,24 @@ function onStorageChanged(changes, areaName) {
 
 function normalizeSettings(value) {
   const next = { ...defaultSettings, ...(value || {}) };
-  next.defaultQuality = normalizeDefaultQuality(next.defaultQuality);
+  next.defaultQuality = normalizeQualitySetting(next.defaultQuality);
   next.downloadPath = safeRelativePath(next.downloadPath || "");
   next.skipDialog = next.skipDialog !== false;
   next.detectHls = next.detectHls !== false;
   next.detectNative = next.detectNative !== false;
   return next;
+}
+
+function normalizeQualitySetting(value) {
+  const raw = String(value || "best").trim();
+  const lower = raw.toLowerCase();
+  const allowed = new Set(["best", "auto", "2160p", "1440p", "1080p", "720p", "480p", "360p"]);
+  if (allowed.has(lower)) return lower === "auto" ? "best" : lower;
+
+  const heightMatch = raw.match(/height<=([0-9]{3,4})/i);
+  if (heightMatch) return `${heightMatch[1]}p`;
+
+  return "best";
 }
 
 async function checkServerTools() {
