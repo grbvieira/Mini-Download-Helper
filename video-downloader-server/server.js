@@ -208,6 +208,24 @@ function parseFfmpegTimeToSeconds(timeStr) {
   return (Number(hh) * 3600) + (Number(mm) * 60) + Number(ss);
 }
 
+function extractFfmpegProgressSeconds(text) {
+  const outTimeMatch = String(text || '').match(/out_time=(\d+:\d+:\d+(?:\.\d+)?)/);
+  if (outTimeMatch) return parseFfmpegTimeToSeconds(outTimeMatch[1]);
+
+  const timeMatch = String(text || '').match(/time=(\d+:\d+:\d+(?:\.\d+)?)/);
+  if (timeMatch) return parseFfmpegTimeToSeconds(timeMatch[1]);
+
+  return 0;
+}
+
+function formatSecondsAsClock(seconds) {
+  const total = Math.max(0, Math.floor(Number(seconds) || 0));
+  const hh = Math.floor(total / 3600);
+  const mm = Math.floor((total % 3600) / 60);
+  const ss = total % 60;
+  return [hh, mm, ss].map(value => String(value).padStart(2, '0')).join(':');
+}
+
 function buildFfmpegHttpInputArgs(headerArgs = []) {
   return [
     '-reconnect', '1',
@@ -353,12 +371,13 @@ function buildFfmpegOutputArgs(rotation) {
   ];
 }
 
-function rotateExistingFile(downloadId, filePath, rotation) {
+async function rotateExistingFile(downloadId, filePath, rotation) {
   if (rotation === 'original') {
     finalizeDownload(downloadId, filePath);
     return;
   }
 
+  const duration = await getDurationSeconds(filePath, []);
   const tempPath = path.join(
     DOWNLOAD_DIR,
     `${path.basename(filePath, path.extname(filePath))}.rotating-${downloadId}.mp4`
@@ -368,6 +387,7 @@ function rotateExistingFile(downloadId, filePath, rotation) {
     '-hide_banner',
     '-loglevel', 'warning',
     '-nostdin',
+    '-progress', 'pipe:2',
     '-y',
     '-i', filePath,
     ...buildFfmpegOutputArgs(rotation),
@@ -378,10 +398,20 @@ function rotateExistingFile(downloadId, filePath, rotation) {
   updateDownload(downloadId, { ffmpegMerge: ffmpeg, tempFiles: [tempPath] });
 
   let stderrLog = '';
+  let lastSent = 0;
   ffmpeg.stderr.on('data', chunk => {
-    stderrLog += chunk.toString();
-    if (!wasCancelled(downloadId)) {
-      sendProgress(downloadId, 99, rotation === 'left' ? 'Girando para esquerda...' : 'Girando para direita...');
+    const text = chunk.toString();
+    stderrLog += text;
+    if (wasCancelled(downloadId)) return;
+
+    const currentSec = extractFfmpegProgressSeconds(text);
+    let percent = duration && currentSec
+      ? Math.max(1, Math.min(99, Math.round((currentSec / duration) * 100)))
+      : 5;
+
+    if (percent >= lastSent + 1 || lastSent === 0) {
+      lastSent = percent;
+      sendProgress(downloadId, percent, rotation === 'left' ? 'Girando para esquerda...' : 'Girando para direita...');
     }
   });
 
@@ -759,14 +789,16 @@ app.post('/download', async (req, res) => {
     if (code !== 0) return sendError(downloadId, `Erro no yt-dlp: ${errorLog.slice(-400)}`);
 
     if (fs.existsSync(finalPath)) {
-      rotateExistingFile(downloadId, finalPath, rotationMode);
+      rotateExistingFile(downloadId, finalPath, rotationMode)
+        .catch(error => sendError(downloadId, 'Erro ao rotacionar arquivo: ' + error.message));
     } else {
       // Fallback when yt-dlp saves the merged file with a different extension.
       const found = findBestDownloadedFile(safeTitle);
       if (found) {
         try {
           fs.renameSync(found.full, finalPath);
-          rotateExistingFile(downloadId, finalPath, rotationMode);
+          rotateExistingFile(downloadId, finalPath, rotationMode)
+            .catch(error => sendError(downloadId, 'Erro ao rotacionar arquivo: ' + error.message));
         } catch (e) {
           sendError(downloadId, 'Erro ao mover arquivo final: ' + e.message);
         }
@@ -809,6 +841,7 @@ app.post('/download-stream', async (req, res) => {
     '-hide_banner',
     '-loglevel', 'warning',
     '-nostdin',
+    '-progress', 'pipe:2',
     '-y',
     ...buildFfmpegHttpInputArgs(headerArgs),
     '-i', url,
@@ -831,10 +864,9 @@ app.post('/download-stream', async (req, res) => {
     const text = chunk.toString();
     stderrLog += text;
 
-    const timeMatch = text.match(/time=(\d+:\d+:\d+(?:\.\d+)?)/);
-    if (!timeMatch || wasCancelled(downloadId)) return;
+    const currentSec = extractFfmpegProgressSeconds(text);
+    if (!currentSec || wasCancelled(downloadId)) return;
 
-    const currentSec = parseFfmpegTimeToSeconds(timeMatch[1]);
     let percent = 0;
 
     if (duration && duration > 0) {
@@ -845,7 +877,12 @@ app.post('/download-stream', async (req, res) => {
     }
     if (percent === 0 || percent >= lastSent + 1) {
       lastSent = percent;
-      sendProgress(downloadId, percent, `Baixando stream (${timeMatch[1]})`);
+      const progressLabel = rotationMode === 'original'
+        ? 'Baixando stream'
+        : rotationMode === 'left'
+          ? 'Baixando e girando para esquerda'
+          : 'Baixando e girando para direita';
+      sendProgress(downloadId, percent, `${progressLabel} (${formatSecondsAsClock(currentSec)})`);
     }
   });
 
