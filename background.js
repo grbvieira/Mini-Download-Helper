@@ -756,10 +756,10 @@ async function handleActionCommand(message) {
 
   switch (message.action) {
     case "download":
-      return await startDownload(hit, effectiveVariantId, false);
+      return await startDownload(hit, effectiveVariantId, false, message.rotation);
 
     case "download_as":
-      return await startDownload(hit, effectiveVariantId, true);
+      return await startDownload(hit, effectiveVariantId, true, message.rotation);
 
     case "copy": {
       const variant = pickVariant(hit, effectiveVariantId);
@@ -860,11 +860,12 @@ async function cancelDownload(hit) {
   }
 }
 
-async function startDownload(hit, variantId, saveAs) {
+async function startDownload(hit, variantId, saveAs, rotation = "original") {
   const variant = pickVariant(hit, variantId);
   if (!variant) {
     return { ok: false, error: "Variante não encontrada" };
   }
+  const rotationMode = normalizeRotationMode(rotation);
 
   hit.status = "running";
   setProgress(hit.id, { percent: 1, text: "Iniciando..." });
@@ -882,7 +883,8 @@ async function startDownload(hit, variantId, saveAs) {
             url: hit.page_url || hit.url,
             quality: ytdlpQualityForVariant(variant),
             title: hit.title,
-            referer: hit.page_url || "https://example.com"
+            referer: hit.page_url || "https://example.com",
+            rotation: rotationMode
           })
         });
 
@@ -895,6 +897,40 @@ async function startDownload(hit, variantId, saveAs) {
         setProgress(hit.id, {
           percent: 1,
           text: `Enviado ao yt-dlp (${describeVariant(variant)})`,
+          serverDownloadId: json.downloadId
+        });
+
+        schedulePersist();
+        notifyPopup();
+        return { ok: true };
+      }
+
+      if (rotationMode !== "original") {
+        const mediaUrl = variant.media_url || hit.url;
+        const response = await fetch(`${SERVER_BASE}/download-stream`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            url: mediaUrl,
+            title: hit.title,
+            referer: hit.page_url || "https://example.com",
+            type: "file",
+            headers: getDownloadHeadersForUrl(mediaUrl, [hit.url]),
+            rotation: rotationMode
+          })
+        });
+
+        const json = await response.json();
+        if (!json.success) {
+          throw new Error(json.error || "Falha no servidor local");
+        }
+
+        hit.serverDownloadId = json.downloadId;
+        setProgress(hit.id, {
+          percent: 1,
+          text: "Enviado ao FFmpeg (rotacao)",
           serverDownloadId: json.downloadId
         });
 
@@ -933,7 +969,8 @@ async function startDownload(hit, variantId, saveAs) {
             title: hit.title,
             referer: hit.page_url || "https://example.com",
             type: "hls",
-            headers: getDownloadHeadersForUrl(variant.media_url, [hit.url])
+            headers: getDownloadHeadersForUrl(variant.media_url, [hit.url]),
+            rotation: rotationMode
           })
         });
 
@@ -963,7 +1000,8 @@ async function startDownload(hit, variantId, saveAs) {
             url: hit.url,
             quality: variant.ytdlp_format_id || normalizeDefaultQuality(settings.defaultQuality),
             title: hit.title,
-            referer: hit.page_url || "https://example.com"
+            referer: hit.page_url || "https://example.com",
+            rotation: rotationMode
           })
       });
 
@@ -997,7 +1035,8 @@ async function startDownload(hit, variantId, saveAs) {
             url: hit.url,
             quality: variant.ytdlp_format_id || normalizeDefaultQuality(settings.defaultQuality),
             title: hit.title,
-            referer: hit.page_url || "https://example.com"
+            referer: hit.page_url || "https://example.com",
+            rotation: rotationMode
           })
         });
 
@@ -1028,7 +1067,8 @@ async function startDownload(hit, variantId, saveAs) {
           title: hit.title,
           referer: hit.page_url || "https://example.com",
           type: "dash",
-          headers: getDownloadHeadersForUrl(variant.media_url, [hit.url])
+          headers: getDownloadHeadersForUrl(variant.media_url, [hit.url]),
+          rotation: rotationMode
         })
       });
 
@@ -1640,6 +1680,11 @@ function normalizeDefaultQuality(value) {
     "auto": "best"
   };
   return map[quality] || value || "best";
+}
+
+function normalizeRotationMode(value) {
+  const mode = String(value || "original").trim().toLowerCase();
+  return ["left", "right"].includes(mode) ? mode : "original";
 }
 
 function preferLonger(a, b) {

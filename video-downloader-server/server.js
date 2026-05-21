@@ -320,6 +320,93 @@ function normalizeIncomingHttpHeaders(headers = {}) {
   return normalized;
 }
 
+function normalizeRotationMode(value) {
+  const mode = String(value || 'original').trim().toLowerCase();
+  return ['left', 'right'].includes(mode) ? mode : 'original';
+}
+
+function rotationFilterForMode(rotation) {
+  if (rotation === 'left') return 'transpose=2';
+  if (rotation === 'right') return 'transpose=1';
+  return '';
+}
+
+function buildFfmpegOutputArgs(rotation) {
+  const filter = rotationFilterForMode(rotation);
+  if (!filter) {
+    return [
+      '-c', 'copy',
+      '-movflags', '+faststart',
+      '-bsf:a', 'aac_adtstoasc'
+    ];
+  }
+
+  return [
+    '-vf', filter,
+    '-c:v', 'libx264',
+    '-preset', 'veryfast',
+    '-crf', '20',
+    '-metadata:s:v:0', 'rotate=0',
+    '-c:a', 'aac',
+    '-b:a', '192k',
+    '-movflags', '+faststart'
+  ];
+}
+
+function rotateExistingFile(downloadId, filePath, rotation) {
+  if (rotation === 'original') {
+    finalizeDownload(downloadId, filePath);
+    return;
+  }
+
+  const tempPath = path.join(
+    DOWNLOAD_DIR,
+    `${path.basename(filePath, path.extname(filePath))}.rotating-${downloadId}.mp4`
+  );
+
+  const ffmpegArgs = [
+    '-hide_banner',
+    '-loglevel', 'warning',
+    '-nostdin',
+    '-y',
+    '-i', filePath,
+    ...buildFfmpegOutputArgs(rotation),
+    tempPath
+  ];
+
+  const ffmpeg = spawn('ffmpeg', ffmpegArgs, { windowsHide: true });
+  updateDownload(downloadId, { ffmpegMerge: ffmpeg, tempFiles: [tempPath] });
+
+  let stderrLog = '';
+  ffmpeg.stderr.on('data', chunk => {
+    stderrLog += chunk.toString();
+    if (!wasCancelled(downloadId)) {
+      sendProgress(downloadId, 99, rotation === 'left' ? 'Girando para esquerda...' : 'Girando para direita...');
+    }
+  });
+
+  ffmpeg.on('error', err => {
+    if (wasCancelled(downloadId)) return;
+    sendError(downloadId, `Falha ao iniciar FFmpeg: ${err.message}`);
+  });
+
+  ffmpeg.on('close', code => {
+    if (wasCancelled(downloadId)) return;
+
+    if (code !== 0) {
+      return sendError(downloadId, `FFmpeg falhou ao rotacionar: ${formatFfmpegError(stderrLog)}`);
+    }
+
+    try {
+      deleteIfExists(filePath);
+      fs.renameSync(tempPath, filePath);
+      finalizeDownload(downloadId, filePath);
+    } catch (error) {
+      sendError(downloadId, 'Erro ao salvar arquivo rotacionado: ' + error.message);
+    }
+  });
+}
+
 function findBestDownloadedFile(prefixBase) {
   const files = fs.readdirSync(DOWNLOAD_DIR);
   const matches = files
@@ -592,13 +679,14 @@ app.post('/list-formats', async (req, res) => {
 
 
 app.post('/download', async (req, res) => {
-  const { url, quality = 'best', title, referer = 'https://example.com' } = req.body;
+  const { url, quality = 'best', title, referer = 'https://example.com', rotation = 'original' } = req.body;
   if (!url) return res.status(400).json({ success: false, error: 'URL obrigatória' });
 
   ensureDirs();
   const downloadId = uuidv4();
   const safeTitle = sanitizeTitle(title || 'video');
   const origin = safeOriginFromReferer(referer);
+  const rotationMode = normalizeRotationMode(rotation);
   
   const finalPath = path.join(DOWNLOAD_DIR, `${safeTitle}.mp4`);
   const templatePath = path.join(DOWNLOAD_DIR, `${safeTitle}.%(ext)s`);
@@ -611,7 +699,7 @@ app.post('/download', async (req, res) => {
     formatArg = `${quality}+bestaudio/best`;
   }
 
-  console.log(`\nIniciando download [ID: ${downloadId}] - ${safeTitle} | Formato: ${formatArg}`);
+  console.log(`\nIniciando download [ID: ${downloadId}] - ${safeTitle} | Formato: ${formatArg} | Rotacao: ${rotationMode}`);
 
   registerDownload(downloadId, { mode: 'ytdlp', finalPath });
   res.json({ success: true, downloadId });
@@ -671,14 +759,14 @@ app.post('/download', async (req, res) => {
     if (code !== 0) return sendError(downloadId, `Erro no yt-dlp: ${errorLog.slice(-400)}`);
 
     if (fs.existsSync(finalPath)) {
-      finalizeDownload(downloadId, finalPath);
+      rotateExistingFile(downloadId, finalPath, rotationMode);
     } else {
       // Fallback when yt-dlp saves the merged file with a different extension.
       const found = findBestDownloadedFile(safeTitle);
       if (found) {
         try {
           fs.renameSync(found.full, finalPath);
-          finalizeDownload(downloadId, finalPath);
+          rotateExistingFile(downloadId, finalPath, rotationMode);
         } catch (e) {
           sendError(downloadId, 'Erro ao mover arquivo final: ' + e.message);
         }
@@ -696,7 +784,8 @@ app.post('/download-stream', async (req, res) => {
     title,
     referer = 'https://example.com',
     type = 'hls',
-    headers = {}
+    headers = {},
+    rotation = 'original'
   } = req.body;
 
   if (!url) {
@@ -708,6 +797,7 @@ app.post('/download-stream', async (req, res) => {
   const downloadId = uuidv4();
   const safeTitle = sanitizeTitle(title || 'stream');
   const finalPath = path.join(DOWNLOAD_DIR, `${safeTitle}.mp4`);
+  const rotationMode = normalizeRotationMode(rotation);
 
   registerDownload(downloadId, { mode: type || 'stream', finalPath, tempFiles: [finalPath] });
   res.json({ success: true, downloadId });
@@ -724,9 +814,7 @@ app.post('/download-stream', async (req, res) => {
     '-i', url,
     '-map', '0:v:0?',
     '-map', '0:a:0?',
-    '-c', 'copy',
-    '-movflags', '+faststart',
-    '-bsf:a', 'aac_adtstoasc',
+    ...buildFfmpegOutputArgs(rotationMode),
     finalPath
   ];
 

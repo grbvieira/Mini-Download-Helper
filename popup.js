@@ -7,6 +7,7 @@ const itemTemplate = document.getElementById("itemTemplate");
 const wsMap = new Map();
 let currentData = null;
 const userSelections = new Map();
+const rotationSelections = new Map();
 const hasExtensionRuntime =
   typeof chrome !== "undefined" &&
   chrome.runtime?.sendMessage &&
@@ -561,6 +562,14 @@ function renderItem(hit, progress) {
     userSelections.set(hit.id, select.value);
   });
 
+  const rotationSelect = node.querySelector(".rotation-select");
+  if (rotationSelections.has(hit.id)) {
+    rotationSelect.value = rotationSelections.get(hit.id);
+  }
+  rotationSelect.addEventListener("change", () => {
+    rotationSelections.set(hit.id, rotationSelect.value);
+  });
+
   const progressRow = node.querySelector(".progress-row");
   const progressBar = node.querySelector(".progress-bar-inner");
   const progressText = node.querySelector(".progress-text");
@@ -582,12 +591,14 @@ function renderItem(hit, progress) {
 
   downloadBtn.addEventListener("click", async () => {
     userSelections.set(hit.id, select.value);
-    await runDisplayAction("download", hit, select.value);
+    rotationSelections.set(hit.id, rotationSelect.value);
+    await runDisplayAction("download", hit, select.value, true, rotationSelect.value);
   });
 
   downloadAsBtn.addEventListener("click", async () => {
     userSelections.set(hit.id, select.value);
-    await runDisplayAction("download_as", hit, select.value);
+    rotationSelections.set(hit.id, rotationSelect.value);
+    await runDisplayAction("download_as", hit, select.value, true, rotationSelect.value);
   });
 
   cancelBtn.addEventListener("click", async () => {
@@ -616,6 +627,7 @@ function renderItem(hit, progress) {
   if (hit.status === "running") {
     downloadBtn.disabled = true;
     downloadAsBtn.disabled = true;
+    rotationSelect.disabled = true;
   }
 
   if (cancellable) {
@@ -650,7 +662,7 @@ function describeVariantWithContext(variant, duplicateCounts) {
   return base;
 }
 
-async function runDisplayAction(action, displayHit, variantId, doRefresh = true) {
+async function runDisplayAction(action, displayHit, variantId, doRefresh = true, rotation = "original") {
   const variant = pickDisplayVariant(displayHit, variantId);
   let lastResult = { ok: true };
 
@@ -668,7 +680,8 @@ async function runDisplayAction(action, displayHit, variantId, doRefresh = true)
       hitId: displayHit.primaryHitId || displayHit.id,
       variantId: variant?.id,
       sourceHitId: variant?.sourceHitId || displayHit.primaryHitId || displayHit.id,
-      sourceVariantId: variant?.id
+      sourceVariantId: variant?.id,
+      rotation
     });
   } else if (action === "pin" || action === "forget") {
     const sourceIds = (displayHit.displaySourceHitIds || [displayHit.primaryHitId || displayHit.id]).filter(Boolean);

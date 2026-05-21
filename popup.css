@@ -277,6 +277,35 @@ main {
   box-shadow: 0 0 0 3px rgba(74, 140, 255, 0.13);
 }
 
+.download-options {
+  margin-top: 7px;
+}
+
+.option-field {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.rotation-select {
+  width: 100%;
+  height: 30px;
+  padding: 0 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  outline: none;
+  background: var(--field);
+  color: var(--text);
+}
+
+.rotation-select:hover,
+.rotation-select:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(74, 140, 255, 0.13);
+}
+
 .progress-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
