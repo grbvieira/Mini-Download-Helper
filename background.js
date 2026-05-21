@@ -17,6 +17,7 @@ const SERVER_BASE = "http://localhost:3000";
 const SETTINGS_KEY = "videoDownloaderSettings";
 const PAGE_THUMB_CACHE_TTL_MS = 15000;
 const PAGE_FORMAT_CACHE_TTL_MS = 60000;
+const REQUEST_HEADER_CACHE_TTL_MS = 10 * 60 * 1000;
 
 const store = {
   hitsById: {},
@@ -39,6 +40,7 @@ let persistTimer = null;
 let loaded = false;
 const pageThumbCache = new Map();
 const pageFormatCache = new Map();
+const requestHeaderCache = new Map();
 
 init().catch(err => {
   console.error("Init error:", err);
@@ -63,6 +65,8 @@ async function init() {
     { urls: ["<all_urls>"] },
     ["responseHeaders"]
   );
+
+  registerBeforeSendHeadersListener();
 
   chrome.webRequest.onCompleted.addListener(
     onCompleted,
@@ -147,6 +151,44 @@ async function handleMessage(message, sender) {
 
     default:
       return { ok: true };
+  }
+}
+
+function registerBeforeSendHeadersListener() {
+  try {
+    chrome.webRequest.onBeforeSendHeaders.addListener(
+      onBeforeSendHeaders,
+      { urls: ["<all_urls>"] },
+      ["requestHeaders", "extraHeaders"]
+    );
+  } catch {
+    chrome.webRequest.onBeforeSendHeaders.addListener(
+      onBeforeSendHeaders,
+      { urls: ["<all_urls>"] },
+      ["requestHeaders"]
+    );
+  }
+}
+
+function onBeforeSendHeaders(details) {
+  try {
+    const url = details.url || "";
+    if (shouldIgnoreUrl(url)) return;
+
+    const lowerUrl = url.toLowerCase();
+    if (
+      !HLS_RE.test(lowerUrl) &&
+      !DASH_RE.test(lowerUrl) &&
+      !SEGMENT_RE.test(lowerUrl) &&
+      !MEDIA_EXT_RE.test(lowerUrl)
+    ) {
+      return;
+    }
+
+    const headers = requestHeaderArrayToObject(details.requestHeaders || []);
+    rememberRequestHeaders(url, headers);
+  } catch (error) {
+    addLog("warn", `Falha ao capturar headers: ${error.message}`);
   }
 }
 
@@ -891,7 +933,7 @@ async function startDownload(hit, variantId, saveAs) {
             title: hit.title,
             referer: hit.page_url || "https://example.com",
             type: "hls",
-            headers: {}
+            headers: getDownloadHeadersForUrl(variant.media_url, [hit.url])
           })
         });
 
@@ -986,7 +1028,7 @@ async function startDownload(hit, variantId, saveAs) {
           title: hit.title,
           referer: hit.page_url || "https://example.com",
           type: "dash",
-          headers: {}
+          headers: getDownloadHeadersForUrl(variant.media_url, [hit.url])
         })
       });
 
@@ -1354,6 +1396,14 @@ function safeUrl(url) {
   }
 }
 
+function safeOriginFromUrl(url) {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return "";
+  }
+}
+
 function headerArrayToObject(headers) {
   const out = {};
   for (const h of headers) {
@@ -1361,6 +1411,76 @@ function headerArrayToObject(headers) {
     out[h.name.toLowerCase()] = h.value || "";
   }
   return out;
+}
+
+function requestHeaderArrayToObject(headers) {
+  const out = {};
+  for (const h of headers) {
+    if (!h?.name) continue;
+    out[h.name.toLowerCase()] = h.value || "";
+  }
+  return out;
+}
+
+function buildDownloadHeaders(headers = {}) {
+  const allowed = [
+    "accept",
+    "accept-language",
+    "authorization",
+    "cookie",
+    "origin",
+    "referer",
+    "user-agent"
+  ];
+  const out = {};
+
+  for (const key of allowed) {
+    if (headers[key]) out[key] = headers[key];
+  }
+
+  return out;
+}
+
+function rememberRequestHeaders(url, headers) {
+  const cleanUrl = sanitizeUrl(url);
+  const safeHeaders = buildDownloadHeaders(headers);
+  if (!cleanUrl || !Object.keys(safeHeaders).length) return;
+
+  cleanupRequestHeaderCache();
+
+  const entry = {
+    headers: safeHeaders,
+    at: Date.now()
+  };
+  requestHeaderCache.set(cleanUrl, entry);
+
+  const origin = safeOriginFromUrl(cleanUrl);
+  if (origin) {
+    requestHeaderCache.set(`origin:${origin}`, entry);
+  }
+}
+
+function getDownloadHeadersForUrl(url, fallbackUrls = []) {
+  cleanupRequestHeaderCache();
+
+  for (const candidate of [url, ...fallbackUrls]) {
+    const cleanUrl = sanitizeUrl(candidate);
+    const entry = cleanUrl ? requestHeaderCache.get(cleanUrl) : null;
+    if (entry) return { ...entry.headers };
+  }
+
+  const origin = safeOriginFromUrl(url);
+  const originEntry = origin ? requestHeaderCache.get(`origin:${origin}`) : null;
+  return originEntry ? { ...originEntry.headers } : {};
+}
+
+function cleanupRequestHeaderCache() {
+  const now = Date.now();
+  for (const [key, entry] of requestHeaderCache.entries()) {
+    if (!entry?.at || now - entry.at > REQUEST_HEADER_CACHE_TTL_MS) {
+      requestHeaderCache.delete(key);
+    }
+  }
 }
 
 function contentLengthFromHeaders(headers = {}) {

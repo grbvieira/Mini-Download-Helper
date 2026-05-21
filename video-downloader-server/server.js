@@ -281,12 +281,13 @@ async function getDurationSeconds(inputPathOrUrl, headerArgs = []) {
 }
 
 function buildHeaderArgs(referer = 'https://example.com', extraHeaders = {}) {
+  const normalizedExtraHeaders = normalizeIncomingHttpHeaders(extraHeaders);
   const origin = safeOriginFromReferer(referer);
   const merged = {
     Referer: referer,
     Origin: origin,
     'User-Agent': DEFAULT_HTTP_USER_AGENT,
-    ...extraHeaders
+    ...normalizedExtraHeaders
   };
 
   const headerBlock = Object.entries(merged)
@@ -295,6 +296,28 @@ function buildHeaderArgs(referer = 'https://example.com', extraHeaders = {}) {
     .join('');
 
   return headerBlock ? ['-headers', headerBlock] : [];
+}
+
+function normalizeIncomingHttpHeaders(headers = {}) {
+  const canonicalNames = {
+    accept: 'Accept',
+    'accept-language': 'Accept-Language',
+    authorization: 'Authorization',
+    cookie: 'Cookie',
+    origin: 'Origin',
+    referer: 'Referer',
+    'user-agent': 'User-Agent'
+  };
+  const normalized = {};
+
+  for (const [name, value] of Object.entries(headers || {})) {
+    const key = String(name || '').toLowerCase();
+    const canonicalName = canonicalNames[key];
+    if (!canonicalName || value === undefined || value === null || value === '') continue;
+    normalized[canonicalName] = value;
+  }
+
+  return normalized;
 }
 
 function findBestDownloadedFile(prefixBase) {
