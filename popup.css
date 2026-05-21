@@ -326,8 +326,13 @@ main {
 
 .actions .copy-btn,
 .actions .pin-btn,
+.actions .cancel-btn,
 .actions .forget-btn {
   font-size: 12px;
+}
+
+.actions .cancel-btn {
+  grid-column: span 2;
 }
 
 .actions .forget-btn {

@@ -737,8 +737,61 @@ async function handleActionCommand(message) {
       notifyPopup();
       return { ok: true };
 
+    case "cancel":
+      return await cancelDownload(hit);
+
     default:
       return { ok: false, error: "Ação inválida" };
+  }
+}
+
+async function cancelDownload(hit) {
+  const progress = store.progress[hit.id] || {};
+  const serverDownloadId = progress.serverDownloadId || hit.serverDownloadId;
+  const directEntry = Object.entries(store.directDownloadMap)
+    .find(([, entry]) => entry?.hitId === hit.id);
+
+  try {
+    if (serverDownloadId) {
+      const response = await fetch(`${SERVER_BASE}/cancel-download`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ downloadId: serverDownloadId })
+      });
+      const json = await response.json();
+      if (!json?.success) {
+        throw new Error(json?.error || "Falha ao cancelar no servidor local");
+      }
+    }
+
+    if (directEntry) {
+      const [downloadId] = directEntry;
+      await chrome.downloads.cancel(Number(downloadId)).catch(() => {});
+      delete store.directDownloadMap[downloadId];
+    }
+
+    hit.status = hit.pinned ? "pinned" : "active";
+    delete hit.serverDownloadId;
+    setProgress(hit.id, {
+      percent: 0,
+      text: "Cancelado",
+      serverDownloadId: null
+    });
+    addLog("info", `Download cancelado: ${hit.title}`);
+    schedulePersist();
+    notifyPopup();
+    return { ok: true };
+  } catch (error) {
+    setProgress(hit.id, {
+      percent: progress.percent || 0,
+      text: `Erro ao cancelar: ${error.message}`,
+      serverDownloadId: serverDownloadId || null
+    });
+    schedulePersist();
+    notifyPopup();
+    return { ok: false, error: error.message };
   }
 }
 
@@ -793,6 +846,11 @@ async function startDownload(hit, variantId, saveAs) {
       });
 
       store.directDownloadMap[downloadId] = { hitId: hit.id };
+      setProgress(hit.id, {
+        percent: 1,
+        text: "Baixando...",
+        chromeDownloadId: downloadId
+      });
       schedulePersist();
       notifyPopup();
       return { ok: true };
@@ -962,7 +1020,8 @@ function onDownloadChanged(delta) {
     );
     setProgress(hit.id, {
       percent,
-      text: `${percent}%`
+      text: `${percent}%`,
+      chromeDownloadId: delta.id
     });
   }
 
@@ -974,17 +1033,24 @@ function onDownloadChanged(delta) {
     hit.status = "downloaded";
     setProgress(hit.id, {
       percent: 100,
-      text: "Concluído"
+      text: "Concluído",
+      chromeDownloadId: delta.id
     });
+    delete store.directDownloadMap[delta.id];
   }
 
   if (delta.error?.current) {
     hit.status = hit.pinned ? "pinned" : "active";
     setProgress(hit.id, {
       percent: 0,
-      text: `Erro: ${delta.error.current}`
+      text: delta.error.current === "USER_CANCELED"
+        ? "Cancelado"
+        : `Erro: ${delta.error.current}`
     });
-    addLog("error", `Download erro: ${delta.error.current}`);
+    if (delta.error.current !== "USER_CANCELED") {
+      addLog("error", `Download erro: ${delta.error.current}`);
+    }
+    delete store.directDownloadMap[delta.id];
   }
 
   schedulePersist();

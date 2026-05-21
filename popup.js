@@ -574,6 +574,7 @@ function renderItem(hit, progress) {
 
   const downloadBtn = node.querySelector(".download-btn");
   const downloadAsBtn = node.querySelector(".download-as-btn");
+  const cancelBtn = node.querySelector(".cancel-btn");
   const copyBtn = node.querySelector(".copy-btn");
   const pinBtn = node.querySelector(".pin-btn");
   const forgetBtn = node.querySelector(".forget-btn");
@@ -586,6 +587,10 @@ function renderItem(hit, progress) {
   downloadAsBtn.addEventListener("click", async () => {
     userSelections.set(hit.id, select.value);
     await runDisplayAction("download_as", hit, select.value);
+  });
+
+  cancelBtn.addEventListener("click", async () => {
+    await runDisplayAction("cancel", hit, select.value);
   });
 
   copyBtn.addEventListener("click", async () => {
@@ -607,6 +612,9 @@ function renderItem(hit, progress) {
   if (hit.status === "running") {
     downloadBtn.disabled = true;
     downloadAsBtn.disabled = true;
+    cancelBtn.classList.remove("hidden");
+  } else {
+    cancelBtn.classList.add("hidden");
   }
 
   return node;
@@ -743,7 +751,9 @@ function ensureWebSocket(serverDownloadId, hitId) {
       if (msg.type === "error") {
         await patchProgress(hitId, {
           percent: 0,
-          text: `Erro: ${msg.error || "falha"}`
+          text: msg.error === "Download cancelado"
+            ? "Cancelado"
+            : `Erro: ${msg.error || "falha"}`
         });
         await patchStatus(hitId, "active");
       }
