@@ -880,12 +880,7 @@ async function startDownload(hit, variantId, saveAs) {
     }
 
     if (hit.type === "hls") {
-      const isConcreteHlsVariant =
-        variant.media_url &&
-        variant.media_url !== hit.url &&
-        /\.m3u8(?:$|\?)/i.test(variant.media_url);
-
-      if (isConcreteHlsVariant) {
+      if (isHlsPlaylistVariant(variant)) {
         const response = await fetch(`${SERVER_BASE}/download-stream`, {
           method: "POST",
           headers: {
@@ -1093,6 +1088,13 @@ async function loadSettings() {
     addLog("warn", `Falha ao carregar configuracoes: ${error.message}`);
     settings = { ...defaultSettings };
   }
+}
+
+function isHlsPlaylistVariant(variant) {
+  return !!(
+    variant?.media_url &&
+    /\.m3u8(?:$|\?)/i.test(variant.media_url)
+  );
 }
 
 function onStorageChanged(changes, areaName) {
